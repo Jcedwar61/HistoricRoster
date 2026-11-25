@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <!-- All build settings (target framework, AssettoServer project references, output path)
+         come from AssettoServer's Plugins/Directory.Build.props. Place this folder inside
+         AssettoServer/Plugins/ and add it to AssettoServer.slnx to build it. -->
+
+    <ItemGroup>
+        <None Update="rosters\**\*.json">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
+</Project>

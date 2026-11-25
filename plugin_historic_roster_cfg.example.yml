@@ -1,0 +1,35 @@
+# Copy to cfg/plugin_historic_roster_cfg.yml (or presets/<name>/...) and edit.
+# Every key is optional; these are the defaults unless noted.
+
+RosterFolder: rosters                 # roster JSON files + content_catalog.json
+CatalogFile: content_catalog.json
+ContentFolder: content                # server's AC content folder (cars/, tracks/)
+EntryListPath:                        # empty = entry_list.ini of the running config
+ServerCfgPath:                        # empty = server_cfg.ini of the running config
+LoadTrack: true                       # switch TRACK / CONFIG_TRACK when loading a roster
+WriteContentManagerLinks: true        # write cm_content/content.json download links
+BackupFiles: true
+DefaultGridOrder: StartingGrid        # AsListed | StartingGrid | FinishingOrder
+MaxSlots: 0                           # 0 = track's pit box count
+MinYear: 1950
+MaxYear: 0                            # 0 = current year
+DownloadSearchUrl: https://www.overtake.gg/search/?q={query}&t=resource
+KunosContentUrl: https://store.steampowered.com/app/244210/Assetto_Corsa/
+
+FallbackSkin: ""
+
+# Race day
+RecreateConditions: true              # real start time, date, weather, temperature (rain needs WeatherFX + CSP)
+RaceLengthPercent: 100                # % of the real distance; 0 = leave the server's race length alone
+KeepRealGrid: true                    # races start from the real grid even after practice/qualifying
+StandIns: Off                         # Off | SameClass (installed same-class car for a missing real car, marked)
+
+# Players
+AllowSeatBooking: true                # /roster_seat books a real driver's seat (Steam GUID, from next restart)
+CompareWithHistory: true              # after each race: your result vs the real driver's
+AnnounceSeatOnJoin: true
+
+EnableF1Import: true                  # Jolpica F1 API, 1950-today
+EnableNascarImport: true              # NASCAR results feed, 2017-today (unofficial)
+CaptureRaceResults: false             # save each finished race on this server in rosters/captured
+CaptureGuids: false                   # store Steam GUIDs in captured rosters (reserves slots on reload)

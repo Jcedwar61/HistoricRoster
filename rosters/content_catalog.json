@@ -1,0 +1,181 @@
+// HistoricRosterPlugin content catalog.
+// Car rules: the first matching rule with a "model" gives the AC folder of the real car; the first
+// matching rule with a "url" (or "search") gives its download link. Put specific rules first.
+// Track rules: first matching rule with a "folder" wins; a rule without folder only adds a link.
+// The catalog only ever names the REAL car or circuit - never a look-alike.
+// "kunos": true = official Kunos content -> players are sent to Steam instead of overtake.gg.
+// Folder names marked kunos were checked against a real Assetto Corsa install.
+// Mod folders (no "ks_" prefix, kunos false) are what was installed on the machine this was made on;
+// change them to match your server. Mod pages were found on overtake.gg in Nov 2026 - many are
+// skin packs that need a base car, which the "note" says.
+{
+  "cars": [
+    // ================= Official Kunos race cars (base game and every DLC) =================
+    // Kunos ui_car.json files have no year, so "RosterTool scan" can't date them: they are listed here by hand,
+    // each for the seasons that exact car raced. "exclude" keeps later versions (Evo, 992, ...) off the older car.
+
+    // ---------------- F1 ----------------
+    { "category": "F1", "yearFrom": 1954, "yearTo": 1957, "team": "Maserati", "model": "ks_maserati_250f_6cyl", "kunos": true },
+    { "category": "F1", "yearFrom": 1962, "yearTo": 1964, "team": "Lotus", "model": "ks_lotus_25", "kunos": true },
+    { "category": "F1", "yearFrom": 1967, "yearTo": 1967, "team": "Ferrari", "model": "ks_ferrari_312_67", "kunos": true },
+    { "category": "F1", "yearFrom": 1971, "yearTo": 1972, "team": "Lotus", "model": "ks_lotus_72d", "kunos": true },
+    { "category": "F1", "yearFrom": 1975, "yearTo": 1975, "team": "Ferrari", "model": "ferrari_312t", "kunos": true },
+    { "category": "F1", "yearFrom": 1986, "yearTo": 1986, "team": "Lotus", "model": "lotus_98t", "kunos": true },
+    { "category": "F1", "yearFrom": 2004, "yearTo": 2004, "team": "Ferrari", "model": "ks_ferrari_f2004", "kunos": true },
+    { "category": "F1", "yearFrom": 2013, "yearTo": 2013, "team": "Ferrari", "model": "ks_ferrari_f138", "kunos": true },
+    { "category": "F1", "yearFrom": 2015, "yearTo": 2015, "team": "Ferrari", "model": "ks_ferrari_sf15t", "kunos": true },
+    { "category": "F1", "yearFrom": 2017, "yearTo": 2017, "team": "Ferrari", "model": "ks_ferrari_sf70h", "kunos": true },
+
+    // ---------------- GT3 (any series: GT3, GTD, SP9 ...) ----------------
+    { "yearFrom": 2010, "yearTo": 2015, "car": "Z4 GT3", "model": "bmw_z4_gt3", "kunos": true },
+    { "yearFrom": 2011, "yearTo": 2016, "car": "SLS AMG GT3", "model": "mercedes_sls_gt3", "kunos": true },
+    { "category": "GT3", "yearFrom": 2011, "yearTo": 2016, "car": "SLS AMG", "model": "mercedes_sls_gt3", "kunos": true },
+    { "yearFrom": 2011, "yearTo": 2015, "car": "12C GT3", "model": "mclaren_mp412c_gt3", "kunos": true },
+    { "yearFrom": 2012, "yearTo": 2015, "car": "R8 LMS", "exclude": ["Evo"], "model": "ks_audi_r8_lms", "kunos": true },
+    { "yearFrom": 2016, "yearTo": 2018, "car": "R8 LMS", "exclude": ["Evo", "Ultra"], "model": "ks_audi_r8_lms_2016", "kunos": true },
+    { "yearFrom": 2012, "yearTo": 2017, "car": "GT-R Nismo GT3", "model": "ks_nissan_gtr_gt3", "kunos": true },
+    { "yearFrom": 2012, "yearTo": 2017, "car": "GT-R GT3", "model": "ks_nissan_gtr_gt3", "kunos": true },
+    { "yearFrom": 2014, "yearTo": 2017, "car": "650S GT3", "model": "ks_mclaren_650_gt3", "kunos": true },
+    { "yearFrom": 2015, "yearTo": 2018, "car": "Huracan GT3", "exclude": ["Evo"], "model": "ks_lamborghini_huracan_gt3", "kunos": true },
+    { "yearFrom": 2016, "yearTo": 2019, "car": "488 GT3", "exclude": ["Evo"], "model": "ks_ferrari_488_gt3", "kunos": true },
+    { "yearFrom": 2020, "car": "488 GT3 Evo", "model": "ks_ferrari_488_gt3_2020", "kunos": true },
+    { "yearFrom": 2016, "yearTo": 2019, "car": "AMG GT3", "exclude": ["Evo"], "model": "ks_mercedes_amg_gt3", "kunos": true },
+    { "yearFrom": 2016, "yearTo": 2018, "car": "911 GT3 R", "exclude": ["992", "991.II", "991.2"], "model": "ks_porsche_911_gt3_r_2016", "kunos": true },
+
+    // ---------------- GTE / GT2 ----------------
+    { "yearFrom": 2009, "yearTo": 2012, "car": "M3 GT2", "model": "bmw_m3_gt2", "kunos": true },
+    { "yearFrom": 2011, "yearTo": 2015, "car": "458 Italia GT2", "model": "ferrari_458_gt2", "kunos": true },
+    { "yearFrom": 2011, "yearTo": 2015, "car": "458 Italia GTE", "model": "ferrari_458_gt2", "kunos": true },
+    { "yearFrom": 2014, "yearTo": 2019, "car": "Corvette C7.R", "model": "ks_corvette_c7r", "kunos": true },
+    { "yearFrom": 2014, "yearTo": 2019, "car": "Corvette C7R", "model": "ks_corvette_c7r", "kunos": true },
+    { "yearFrom": 2017, "yearTo": 2018, "car": "911 RSR", "exclude": ["RSR-19", "Carrera", "GT3-RSR", "GT3 RSR", "997", "996", "993", "964"], "model": "ks_porsche_911_rsr_2017", "kunos": true },
+
+    // ---------------- GT1 ----------------
+    { "yearFrom": 2004, "yearTo": 2010, "car": "MC12", "model": "ks_maserati_mc12_gt1", "kunos": true },
+    { "yearFrom": 1998, "yearTo": 1999, "car": "911 GT1", "exclude": ["Evo"], "model": "ks_porsche_911_gt1", "kunos": true },
+    { "yearFrom": 1995, "yearTo": 1997, "car": "McLaren F1 GTR", "model": "ks_mclaren_f1_gtr", "kunos": true },
+    { "category": "GT1", "yearFrom": 1995, "yearTo": 1997, "car": "McLaren F1", "model": "ks_mclaren_f1_gtr", "kunos": true },
+
+    // ---------------- Prototypes ----------------
+    { "yearFrom": 2014, "yearTo": 2014, "car": "R18 e-tron", "model": "ks_audi_r18_etron_quattro", "kunos": true },
+    { "category": "LMP1", "yearFrom": 2014, "yearTo": 2014, "car": "R18", "model": "ks_audi_r18_etron_quattro", "kunos": true },
+    { "yearFrom": 2014, "yearTo": 2014, "car": "TS040", "model": "ks_toyota_ts040", "kunos": true },
+    { "yearFrom": 2014, "yearTo": 2015, "car": "919", "model": "ks_porsche_919_hybrid_2015", "kunos": true },
+    { "yearFrom": 2016, "yearTo": 2017, "car": "919", "model": "ks_porsche_919_hybrid_2016", "kunos": true },
+    { "yearFrom": 1991, "yearTo": 1991, "car": "787B", "model": "ks_mazda_787b", "kunos": true },
+    { "yearFrom": 1987, "yearTo": 1989, "car": "C9", "model": "ks_mercedes_c9", "kunos": true },
+    { "yearFrom": 1985, "yearTo": 1994, "car": "962", "model": "ks_porsche_962c_longtail", "kunos": true },
+    { "yearFrom": 1978, "yearTo": 1978, "car": "935/78", "model": "ks_porsche_935_78_moby_dick", "kunos": true },
+    { "yearFrom": 1970, "yearTo": 1971, "car": "917", "exclude": ["917/30", "917/10"], "model": "ks_porsche_917_k", "kunos": true },
+    { "yearFrom": 1968, "yearTo": 1971, "car": "908", "model": "ks_porsche_908_lh", "kunos": true },
+    { "yearFrom": 1967, "yearTo": 1967, "car": "330 P4", "model": "ks_ferrari_330_p4", "kunos": true },
+    { "yearFrom": 1964, "yearTo": 1969, "car": "GT40", "model": "ks_ford_gt40", "kunos": true },
+    { "yearFrom": 1962, "yearTo": 1964, "car": "250 GTO", "model": "ks_ferrari_250_gto", "kunos": true },
+
+    // ---------------- Other race cars (Nürburgring 24 / Spa / Bathurst classes) ----------------
+    { "yearFrom": 2011, "yearTo": 2012, "car": "P4/5", "model": "p4-5_2011", "kunos": true },
+    { "yearFrom": 2017, "yearTo": 2019, "car": "003C", "model": "ks_glickenhaus_scg003", "kunos": true },
+    { "yearFrom": 2017, "yearTo": 2019, "car": "SCG 003", "model": "ks_glickenhaus_scg003", "kunos": true },
+    { "yearFrom": 2017, "yearTo": 2020, "car": "911 GT3 Cup", "exclude": ["992", "997", "996", "991.1"], "model": "ks_porsche_911_gt3_cup_2017", "kunos": true },
+    { "yearFrom": 2014, "yearTo": 2019, "car": "M235i Racing", "model": "ks_bmw_m235i_racing", "kunos": true },
+    { "yearFrom": 2016, "yearTo": 2019, "car": "Cayman GT4 Clubsport", "exclude": ["718", " RS"], "model": "ks_porsche_cayman_gt4_clubsport", "kunos": true },
+    { "yearFrom": 2016, "yearTo": 2019, "car": "981 GT4", "model": "ks_porsche_cayman_gt4_clubsport", "kunos": true },
+    { "yearFrom": 2014, "yearTo": 2019, "car": "GranTurismo MC GT4", "model": "ks_maserati_gt_mc_gt4", "kunos": true },
+    { "yearFrom": 2011, "yearTo": 2015, "car": "TT RS", "model": "ks_audi_tt_vln", "kunos": true },
+
+    // ================= Mods and download pages =================
+    // ---------------- F1 ----------------
+
+    { "category": "F1", "yearFrom": 1998, "yearTo": 1998, "url": "https://www.overtake.gg/downloads/f1-1998-skin-mod.16163/",
+      "note": "Skins for the Ferrari F300 / McLaren MP4-13; needs the Virtua Simulazioni (VRC) car mods" },
+    { "category": "F1", "yearFrom": 2006, "yearTo": 2006, "url": "https://www.overtake.gg/downloads/ctdp-f1-2006-mod-by-cimmerian_iter.82933/",
+      "note": "Full 2006 grid. Author says to install manually into the assettocorsa folder, not through Content Manager" },
+    { "category": "F1", "yearFrom": 2008, "yearTo": 2008, "url": "https://www.overtake.gg/downloads/f1-2008-for-assetto-corsa.76752/",
+      "note": "Full 2008 grid; lists the circuits it needs on the page" },
+    { "category": "F1", "yearFrom": 2009, "yearTo": 2009, "url": "https://www.overtake.gg/downloads/f1-2009-for-assetto-corsa.77130/",
+      "note": "Full 2009 grid; some circuits are separate links inside the download" },
+    { "category": "F1", "yearFrom": 2023, "yearTo": 2023, "url": "https://www.overtake.gg/downloads/formula-1-world-championship-2023.58535/" },
+    { "category": "F1", "yearFrom": 2024, "yearTo": 2024, "url": "https://www.overtake.gg/downloads/formula-1-world-championship-2024.67802/" },
+    { "category": "F1", "yearFrom": 2025, "yearTo": 2025, "url": "https://www.overtake.gg/downloads/vrc-formula-alpha-2024-f1-2025-championship.75579/",
+      "note": "2025 championship skins for the VRC Formula Alpha 2024 car" },
+    { "category": "F1", "search": "F1 {year} {team}" },
+
+
+    // ---------------- GT1 ----------------
+    { "category": "GT1", "yearFrom": 2009, "yearTo": 2009, "url": "https://www.overtake.gg/downloads/2009-fia-gt-gt1-skinpack.80089/",
+      "note": "2009 FIA GT skins (Saleen S7R, Corvette C6R, Ford GT); needs Tomsim's Corvette C6R and the paid RSS GT pack" },
+    { "category": "GT1", "yearFrom": 2010, "yearTo": 2010, "car": "Corvette", "url": "https://www.overtake.gg/downloads/fia-gt1-2010-mad-croc-racing-corvette-c6r.75734/",
+      "note": "Skin for Tomsim's Corvette C6R" },
+    { "category": "GT1", "car": "Saleen", "url": "https://www.overtake.gg/downloads/rss-shadow-v8-saleen-s7r-gt1-livery-pack.27022/",
+      "note": "Liveries for the RSS Shadow V8 (paid RSS GT pack)" },
+    { "category": "GT1", "search": "GT1 {car} {year}" },
+
+    // ---------------- LMP1 ----------------
+    { "category": "LMP1", "car": "R10", "url": "https://www.overtake.gg/downloads/audi-r10-tdi-lmp1-2006-2008-24h-le-mans-cf_audi_r10_tdi.67633/",
+      "note": "2006-2008 Le Mans skins for the cf_audi_r10_tdi car (a commenter reported an antivirus warning - scan it)" },
+    { "category": "LMP1", "yearFrom": 2007, "yearTo": 2008, "car": "908", "url": "https://www.overtake.gg/downloads/peugeot-908-hdi-fap-pack-2007-2008-alms-lms-lm24h.68037/",
+      "note": "2007-2008 skins; needs CSP" },
+    { "category": "LMP1", "yearFrom": 2010, "yearTo": 2010, "car": "908", "url": "https://www.overtake.gg/downloads/2010-peugeot-908-hdi-lmp1-pack.56582/" },
+    { "category": "LMP1", "yearFrom": 2007, "yearTo": 2007, "url": "https://www.overtake.gg/downloads/24h-le-mans-2007.64109/",
+      "note": "24h Le Mans 2007 package (some cars are separate downloads)" },
+    { "category": "LMP1", "search": "LMP1 {car} {year}" },
+
+    // ---------------- Mods without a year in their files (matched here by name and season) ----------------
+    { "yearFrom": 2017, "yearTo": 2023, "car": "RC F GT3", "model": "lexus_rcf_gt3" },
+    { "yearFrom": 2012, "yearTo": 2016, "car": "Morgan", "class": "LMP2", "model": "morgan_lmp2" },
+    { "yearFrom": 2011, "yearTo": 2014, "car": "Zytek Z11SN", "model": "zytek_z11sn_lmp2" },
+    { "yearFrom": 2008, "yearTo": 2016, "car": "Riley", "class": "DP", "model": "ford_riley_daytona" },
+    { "yearFrom": 2015, "yearTo": 2020, "car": "JS P3", "exclude": ["P320"], "model": "wec_lmp3_ligier_jsp3" },
+
+    // ---------------- GT3 ----------------
+    { "category": "GT3", "car": "Mustang", "model": "ford_mustang_gt3" },
+    { "category": "GT3", "car": "Corvette", "model": "corvette_z06_gt3r" },
+    { "category": "GT3", "search": "GT3 {car}" },
+
+    // ---------------- NASCAR / stock car ----------------
+    { "category": "NASCAR", "yearFrom": 2000, "yearTo": 2000, "url": "https://www.overtake.gg/downloads/2000-nascar-winston-cup-series.48571/" },
+    { "category": "NASCAR", "search": "NASCAR {car}",
+      "note": "No free current Cup car on overtake.gg was found; add a rule with your stock car mod for its season" }
+  ],
+
+  "tracks": [
+    // ---------------- Official Kunos ----------------
+    // Period layouts first (matching ignores accents: "nurburgring" = "Nürburgring").
+    { "match": ["silverstone"], "yearTo": 1974, "folder": "ks_silverstone1967", "kunos": true, "note": "Silverstone before the 1975 Woodcote chicane" },
+    { "match": ["monza"], "yearFrom": 1955, "yearTo": 1956, "folder": "ks_monza66", "layout": "full", "kunos": true, "note": "Road course plus the banking" },
+    { "match": ["monza"], "yearFrom": 1960, "yearTo": 1961, "folder": "ks_monza66", "layout": "full", "kunos": true, "note": "Road course plus the banking" },
+    { "match": ["monza"], "yearTo": 1971, "folder": "ks_monza66", "layout": "road", "kunos": true, "note": "Monza before the 1972 chicanes" },
+    { "match": ["nordschleife"], "category": "GT3", "folder": "ks_nordschleife", "layout": "endurance", "kunos": true, "note": "24h layout: GP circuit plus Nordschleife" },
+    { "match": ["nordschleife"], "folder": "ks_nordschleife", "layout": "nordschleife", "kunos": true },
+    { "match": ["nurburg"], "category": "F1", "yearTo": 1976, "folder": "ks_nordschleife", "layout": "nordschleife", "kunos": true, "note": "F1 raced on the Nordschleife until 1976" },
+    { "match": ["nurburg"], "folder": "ks_nurburgring", "layout": "layout_gp_a", "kunos": true },
+
+    { "match": ["catalunya", "barcelona"], "folder": "ks_barcelona", "layout": "layout_gp", "kunos": true },
+    { "match": ["silverstone"], "folder": "ks_silverstone", "layout": "gp", "kunos": true },
+    { "match": ["monza"], "folder": "monza", "kunos": true },
+    { "match": ["spa", "francorchamps"], "folder": "spa", "kunos": true },
+    { "match": ["imola", "enzo e dino ferrari"], "folder": "imola", "kunos": true },
+    { "match": ["mugello"], "folder": "mugello", "kunos": true },
+    { "match": ["red_bull_ring", "red bull ring", "a1-ring", "spielberg"], "folder": "ks_red_bull_ring", "layout": "layout_gp", "kunos": true },
+    { "match": ["zandvoort"], "folder": "ks_zandvoort", "kunos": true, "note": "Kunos Zandvoort is the pre-2020 layout" },
+    { "match": ["brands_hatch", "brands hatch"], "folder": "ks_brands_hatch", "layout": "gp", "kunos": true },
+    { "match": ["laguna"], "folder": "ks_laguna_seca", "kunos": true },
+    { "match": ["vallelunga"], "folder": "ks_vallelunga", "layout": "extended_circuit", "kunos": true },
+
+    // ---------------- Mods with known folders ----------------
+    { "match": ["sepang"], "folder": "acu_sepang", "url": "https://www.overtake.gg/downloads/sepang-international-circuit-acu_sepang-pyyers-ext-ai.72332/" },
+    { "match": ["le mans", "sarthe", "la sarthe"], "folder": "sx_lemans", "layout": "chicane_24h_race", "search": "Le Mans Circuit de la Sarthe" },
+    { "match": ["martinsville"], "folder": "aa_martinsville", "search": "Martinsville Speedway" },
+    { "match": ["sonoma", "infineon", "sears point"], "folder": "infineon", "layout": "nascar", "search": "Sonoma Raceway" },
+    { "match": ["bathurst", "mount panorama"], "folder": "rt_bathurst", "search": "Mount Panorama Bathurst" },
+    { "match": ["monaco", "monte carlo", "monte-carlo"], "folder": "RealMonaco", "search": "Monaco" },
+    { "match": ["albert_park", "albert park", "melbourne"], "folder": "fn_albertpark", "search": "Albert Park" },
+
+    // ---------------- Link only (folder name depends on the mod you install) ----------------
+    { "match": ["villeneuve", "montreal"], "url": "https://www.overtake.gg/downloads/circuit-gilles-villeneuve-montr%C3%A9al-qu%C3%A9bec-canada.4439/" },
+    { "match": ["suzuka"], "yearFrom": 1987, "yearTo": 2002, "url": "https://www.overtake.gg/downloads/suzuka-circuit-1988.61905/" },
+    { "match": ["charlotte"], "url": "https://www.overtake.gg/downloads/mountain-peak-charlotte-speedway.25103/", "note": "Oval and road course" },
+    { "match": ["bristol", "atlanta", "dover", "pocono", "michigan", "kansas", "texas motor", "phoenix", "richmond", "darlington", "homestead", "las vegas motor", "new hampshire", "chicagoland", "kentucky", "iowa"],
+      "url": "https://www.overtake.gg/downloads/jns-trackpack-32-oval-tracks.12959/", "note": "JNS Trackpack: 32 oval tracks ported from rFactor" }
+  ]
+}
