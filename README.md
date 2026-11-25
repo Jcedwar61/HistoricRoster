@@ -4,7 +4,7 @@ Recreate real races from 1996 to today in Assetto Corsa: F1, GT1, LMP1, GT3 and 
 Real grids, real cars, real tracks.
 
 **Download:** get `HistoricRosterSetup.exe` from the
-[latest release](https://github.com/Jcedwar61/HistoricRosterPlugin/releases/latest) (Windows, 64-bit).
+[latest release](https://github.com/Jcedwar61/HistoricRoster/releases/latest) (Windows, 64-bit).
 
 **Start here: the Historic Roster program.** Run `HistoricRosterSetup.exe` to install it (no
 administrator rights needed), open **Historic Roster** from the Start menu or desktop, pick a real
