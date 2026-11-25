@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <!-- Command-line companion for HistoricRosterPlugin. The logic lives in ../Core (shared with the desktop program). -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <RootNamespace>HistoricRosterPlugin</RootNamespace>
+        <AssemblyName>RosterTool</AssemblyName>
+        <!-- Keep in step with App/HistoricRosterApp.csproj: written to SimCast's race_context.json as app_version. -->
+        <Version>1.10.0</Version>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Core\HistoricRosterCore.csproj" />
+        <!-- Bundled data: catalog, and the CSP app for install-app. -->
+        <None Include="..\HistoricRosterPlugin\rosters\*.json" Link="rosters\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+        <None Include="..\README.md" Link="USER_GUIDE.md" CopyToOutputDirectory="PreserveNewest" />
+        <None Include="..\CspApp\HistoricRoster\**\*" Link="CspApp\HistoricRoster\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+</Project>

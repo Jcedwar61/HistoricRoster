@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <!-- "Historic Roster": desktop program to pick a real race, see the full setup, and start it in Assetto Corsa. -->
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net8.0-windows</TargetFramework>
+        <UseWPF>true</UseWPF>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <RootNamespace>HistoricRosterApp</RootNamespace>
+        <AssemblyName>HistoricRoster</AssemblyName>
+        <ApplicationIcon>app.ico</ApplicationIcon>
+        <Product>Historic Roster</Product>
+        <Version>1.10.0</Version>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Core\HistoricRosterCore.csproj" />
+        <!-- Reads and writes DDS livery textures for the livery generator (MIT licence). -->
+        <PackageReference Include="BCnEncoder.Net" Version="2.1.0" />
+        <Resource Include="app.ico" />
+        <!-- Bundled data: catalog (the database is added when publishing). -->
+        <None Include="..\HistoricRosterPlugin\rosters\*.json" Link="rosters\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+        <None Include="..\README.md" Link="USER_GUIDE.md" CopyToOutputDirectory="PreserveNewest" />
+        <!-- The Historic Roster in-game (CSP) app: installed into Assetto Corsa when you watch an AI race. -->
+        <None Include="..\CspApp\HistoricRoster\**\*" Link="CspApp\HistoricRoster\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+</Project>

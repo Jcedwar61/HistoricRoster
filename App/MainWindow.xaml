@@ -1,0 +1,550 @@
+<Window x:Class="HistoricRosterApp.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Historic Roster" Width="1400" Height="900" MinWidth="1080" MinHeight="640"
+        Background="{StaticResource Bg}" WindowStartupLocation="CenterScreen">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ============================== Top bar ============================== -->
+        <Grid Grid.Row="0">
+            <Border Background="{StaticResource HeaderGradient}" Padding="20,12,16,12">
+                <DockPanel LastChildFill="False">
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                        <!-- Logo: a chequered-flag mark in a rounded tile -->
+                        <Border Width="36" Height="36" CornerRadius="9" Background="{StaticResource AccentGradient}" VerticalAlignment="Center"
+                                Effect="{StaticResource ButtonGlow}">
+                            <Canvas Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Rectangle Canvas.Left="0" Canvas.Top="0" Width="6" Height="6" Fill="White"/>
+                                <Rectangle Canvas.Left="12" Canvas.Top="0" Width="6" Height="6" Fill="White"/>
+                                <Rectangle Canvas.Left="6" Canvas.Top="6" Width="6" Height="6" Fill="White"/>
+                                <Rectangle Canvas.Left="0" Canvas.Top="12" Width="6" Height="6" Fill="White"/>
+                                <Rectangle Canvas.Left="12" Canvas.Top="12" Width="6" Height="6" Fill="White"/>
+                                <Rectangle Canvas.Left="6" Canvas.Top="0" Width="6" Height="6" Fill="#55FFFFFF"/>
+                                <Rectangle Canvas.Left="0" Canvas.Top="6" Width="6" Height="6" Fill="#55FFFFFF"/>
+                                <Rectangle Canvas.Left="12" Canvas.Top="6" Width="6" Height="6" Fill="#55FFFFFF"/>
+                                <Rectangle Canvas.Left="6" Canvas.Top="12" Width="6" Height="6" Fill="#55FFFFFF"/>
+                            </Canvas>
+                        </Border>
+                        <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="HISTORIC ROSTER" Foreground="White" FontFamily="{StaticResource DisplayFont}" FontSize="17"
+                                       FontWeight="Bold"/>
+                            <TextBlock Text="Real grids · real results · Assetto Corsa" Foreground="{StaticResource HeaderMuted}" FontSize="11"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="UpdateDbButton" Content="Update races" Style="{StaticResource ToolbarButton}" Click="UpdateDb_Click"
+                                ToolTip="Download new real race results (F1, NASCAR, endurance)"/>
+                        <Button x:Name="ScanButton" Content="Scan content" Style="{StaticResource ToolbarButton}" Click="Scan_Click"
+                                ToolTip="Match your installed cars and tracks to the real ones now (it also happens by itself whenever your cars or tracks folder changes)"/>
+                        <Button x:Name="ChampButton" Content="Import championships" Style="{StaticResource ToolbarButton}" Click="Champ_Click"
+                                ToolTip="Read Content Manager championships (.champ) for exact cars, liveries and tracks"/>
+                        <Border Width="1" Height="22" Background="#26FFFFFF" Margin="6,0,12,0"/>
+                        <Button Content="Season" Style="{StaticResource ToolbarButton}" Click="Season_Click"
+                                ToolTip="Drive a whole real season in one driver's seat, with a points table"/>
+                        <Button Content="Last result" Style="{StaticResource ToolbarButton}" Click="LastResult_Click"
+                                ToolTip="Compare your last race with the real result"/>
+                        <Border Width="1" Height="22" Background="#26FFFFFF" Margin="6,0,12,0"/>
+                        <Button Content="✦  Ask AI" Style="{StaticResource ToolbarButton}" Click="AskAi_Click"
+                                ToolTip="Ask the AI (OpenAI / DeepSeek) about this race, the program, an error or motorsport history"/>
+                        <Button Content="AI settings" Style="{StaticResource ToolbarButton}" Click="AiSettings_Click"
+                                ToolTip="OpenAI and DeepSeek API keys and models"/>
+                        <Border Width="1" Height="22" Background="#26FFFFFF" Margin="6,0,12,0"/>
+                        <Button Content="⚙" Style="{StaticResource ToolbarButton}" Click="Settings_Click" ToolTip="Settings" FontSize="15"
+                                Padding="9,3" Width="34" Height="32"/>
+                        <Button Content="?" Style="{StaticResource ToolbarButton}" Click="Guide_Click" Margin="0" ToolTip="User guide" FontSize="14"
+                                FontWeight="Bold" Padding="9,3" Width="34" Height="32"/>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+            <!-- racing stripe under the bar -->
+            <Border Height="3" VerticalAlignment="Bottom" Background="{StaticResource AccentStripe}"/>
+        </Grid>
+
+        <!-- ============================== Main ============================== -->
+        <Grid Grid.Row="1" Margin="18,18,18,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="370"/>
+                <ColumnDefinition Width="18"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Race list -->
+            <Border Grid.Column="0" Style="{StaticResource CardBorder}" Padding="14" Margin="0,0,0,18">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Text="RACES" Style="{StaticResource CardTitle}"/>
+                        <DockPanel>
+                            <Button x:Name="AiSearchButton" DockPanel.Dock="Right" Content="✦ AI" Style="{StaticResource SmallButton}" Margin="8,0,0,0" Height="34"
+                                    Click="AiSearch_Click" ToolTip="Search in plain words with AI, e.g. 'Hakkinen's title-deciding races' or 'wet Le Mans in the 90s'"/>
+                            <Grid>
+                                <TextBox x:Name="SearchBox" Padding="30,0,8,0" Height="34" TextChanged="Filter_Changed" KeyDown="SearchBox_KeyDown"
+                                         ToolTip="Search: name, track, year (e.g. 'monza 2006', 'le mans'). Ctrl+Enter asks the AI."/>
+                                <!-- magnifier and placeholder -->
+                                <Path Data="M6,0 A6,6 0 1 1 5.99,0 M10.5,10.5 L14,14" Stroke="{StaticResource Muted}" StrokeThickness="1.6"
+                                      StrokeEndLineCap="Round" Margin="10,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                      IsHitTestVisible="False" Width="14" Height="14" Stretch="Uniform"/>
+                                <TextBlock Text="Search races, tracks, years…" Foreground="{StaticResource Muted}" Margin="31,0,0,0"
+                                           VerticalAlignment="Center" IsHitTestVisible="False">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </DockPanel>
+                        <Grid Margin="0,10,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <ComboBox x:Name="SeriesBox" Grid.Column="0" SelectionChanged="Filter_Changed"/>
+                            <ComboBox x:Name="YearBox" Grid.Column="2" SelectionChanged="Filter_Changed"/>
+                        </Grid>
+                        <CheckBox x:Name="ReadyOnlyBox" Content="Only races I can run" ToolTip="Races whose track and cars (or stand-ins) are installed" Margin="2,12,0,0"
+                                  Checked="Filter_Changed" Unchecked="Filter_Changed"/>
+                        <DockPanel x:Name="AiSearchPanel" Visibility="Collapsed" Margin="0,6,0,0">
+                            <Button DockPanel.Dock="Right" Content="Clear" Style="{StaticResource SmallButton}" Margin="6,0,0,0" Click="AiSearchClear_Click"
+                                    VerticalAlignment="Top"/>
+                            <TextBlock x:Name="AiSearchText" FontSize="11" Foreground="{StaticResource Warn}" TextWrapping="Wrap"/>
+                        </DockPanel>
+                        <TextBlock x:Name="ListCountText" Foreground="{StaticResource Muted}" FontSize="11" Margin="2,10,0,8"/>
+                        <Border Height="1" Background="{StaticResource Line}" Margin="-14,0,-14,6"/>
+                    </StackPanel>
+                    <ListBox x:Name="RaceList" BorderThickness="0" SelectionChanged="RaceList_SelectionChanged"
+                             VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Subtitle}" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,1,0,0"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                    <!-- status pill, tinted with its own colour -->
+                                    <Grid Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0">
+                                        <Border CornerRadius="9" Background="{Binding ReadyBrush}" Opacity="0.12"/>
+                                        <TextBlock Text="{Binding ReadyText}" Foreground="{Binding ReadyBrush}" FontSize="10.5"
+                                                   FontWeight="Bold" Margin="8,2"/>
+                                    </Grid>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+
+            <!-- Pre-race setup -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding Visibility, ElementName=EmptyText}">
+                    <Border Width="72" Height="72" CornerRadius="20" Background="{StaticResource Card}" HorizontalAlignment="Center"
+                            Effect="{StaticResource CardShadow}" Margin="0,0,0,16">
+                        <Path Data="M0,0 L0,30 M0,2 C8,-2 14,6 24,2 L24,16 C14,20 8,12 0,16" Stroke="{StaticResource Accent}" StrokeThickness="2.4"
+                              StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              HorizontalAlignment="Center" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                    </Border>
+                    <TextBlock x:Name="EmptyText" Text="Pick a race to see its grid and setup" FontFamily="{StaticResource DisplayFont}"
+                               FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Every race comes with its real entry list, starting grid and result." Foreground="{StaticResource Muted}"
+                               HorizontalAlignment="Center" Margin="0,6,0,0"/>
+                </StackPanel>
+
+                <ScrollViewer x:Name="SetupPanel" Grid.Row="0" VerticalScrollBarVisibility="Auto" Visibility="Collapsed">
+                    <StackPanel Margin="0,0,10,0">
+                        <!-- Event header -->
+                        <Border Style="{StaticResource CardBorder}" Padding="0">
+                            <Grid>
+                            <Border CornerRadius="12,0,0,12" Width="5" HorizontalAlignment="Left" Background="{StaticResource AccentGradient}"/>
+                            <StackPanel Margin="24,20,20,18">
+                                <TextBlock x:Name="RaceTitle" FontFamily="{StaticResource DisplayFont}" FontSize="28" FontWeight="Bold" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="RaceSubtitle" Foreground="{StaticResource Muted}" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="RaceSource" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="RaceNotes" Foreground="{StaticResource Warn}" Margin="0,4,0,0" TextWrapping="Wrap">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Style.Triggers>
+                                                <Trigger Property="Text" Value="">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <Button Content="✦  AI race preview" Style="{StaticResource SmallButton}" Click="AiPreview_Click" Margin="0,0,8,0"
+                                            ToolTip="The AI writes a briefing: the season so far, the circuit, the storylines and your seat's driver (the real outcome is at the end, marked as a spoiler)"/>
+                                    <Button Content="Ask AI about this race" Style="{StaticResource SmallButton}" Click="AskAi_Click" Margin="0"/>
+                                </StackPanel>
+                            </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <!-- Track + settings -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="14"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Border Grid.Column="0" Style="{StaticResource CardBorder}">
+                                <!-- Image row takes whatever height the card has (it matches the settings card),
+                                     so there is no empty band under the track details. -->
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*" MinHeight="190"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Text="TRACK" Style="{StaticResource CardTitle}"/>
+                                    <Border Grid.Row="1" Background="{StaticResource Subtle}" CornerRadius="10" ClipToBounds="True">
+                                        <Grid>
+                                            <Image x:Name="TrackPreview" Stretch="UniformToFill"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                                            <!-- AC outlines are white lines on transparent: give them a dark chip so they read on any photo -->
+                                            <Border x:Name="TrackOutlineChip" Background="#B3101318" CornerRadius="10" Padding="10"
+                                                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="10">
+                                                <Image x:Name="TrackOutline" Stretch="Uniform" Width="110" Height="80"
+                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                            </Border>
+                                            <TextBlock x:Name="TrackNoImage" Text="No preview image" Foreground="{StaticResource Muted}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+                                    <StackPanel Grid.Row="2">
+                                    <TextBlock x:Name="TrackName" FontFamily="{StaticResource DisplayFont}" FontSize="16" FontWeight="SemiBold" Margin="0,12,0,0" TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="TrackFolder" Foreground="{StaticResource Muted}" TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="TrackStatus" FontWeight="SemiBold" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <Button Content="Choose track…" Style="{StaticResource SmallButton}" Click="ChooseTrack_Click" Margin="0,0,8,0"
+                                                ToolTip="Pick the installed track to use for this circuit. Remembered for every race here."/>
+                                        <Button x:Name="ResetTrackButton" Content="Use automatic match" Style="{StaticResource SmallButton}" Click="ResetTrack_Click"
+                                                Visibility="Collapsed" Margin="0"/>
+                                    </StackPanel>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <Border Grid.Column="2" Style="{StaticResource CardBorder}">
+                                <StackPanel x:Name="SettingsPanel">
+                                    <TextBlock Text="RACE SETTINGS" Style="{StaticResource CardTitle}"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="110"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="64"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="38"/>
+                                            <RowDefinition Height="38"/>
+                                            <RowDefinition Height="38"/>
+                                            <RowDefinition Height="38"/>
+                                            <RowDefinition Height="38"/>
+                                            <RowDefinition Height="38"/>
+                                            <RowDefinition Height="38"/>
+                                            <RowDefinition Height="38"/>
+                                            <RowDefinition Height="38"/>
+                                            <RowDefinition Height="38"/>
+                                            <RowDefinition Height="38"/>
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Text="Your seat" Style="{StaticResource Label}"/>
+                                        <DockPanel Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" VerticalAlignment="Center">
+                                            <TextBox x:Name="PlayerNameBox" DockPanel.Dock="Left" Width="130" Padding="8,5" VerticalAlignment="Center"
+                                                     TextChanged="PlayerName_Changed"
+                                                     ToolTip="Your driver name. It replaces the real driver in the grid position you pick, in the race and in the results."/>
+                                            <TextBlock DockPanel.Dock="Left" Text="replaces" Foreground="{StaticResource Muted}" Margin="8,0" VerticalAlignment="Center"/>
+                                            <ComboBox x:Name="SeatBox" VerticalAlignment="Center"
+                                                      SelectionChanged="Seat_Changed" DisplayMemberPath="Text"
+                                                      ToolTip="The grid position you start from. You take this driver's car and livery."/>
+                                        </DockPanel>
+
+                                        <TextBlock Grid.Row="1" Text="Default seat" Style="{StaticResource Label}"/>
+                                        <DockPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" VerticalAlignment="Center">
+                                            <Button DockPanel.Dock="Right" Content="★ Favourite" Style="{StaticResource SmallButton}" Margin="6,0,0,0"
+                                                    Click="Favourite_Click" ToolTip="Make the current seat's driver and team your favourites"/>
+                                            <ComboBox x:Name="SeatModeBox" SelectionChanged="SeatMode_Changed">
+                                                <ComboBoxItem Content="Pole sitter" Tag="Pole"/>
+                                                <ComboBoxItem Content="Random midfield seat" Tag="Midfield"/>
+                                                <ComboBoxItem Content="My favourite team" Tag="Team"/>
+                                                <ComboBoxItem Content="My favourite driver" Tag="Driver"/>
+                                            </ComboBox>
+                                        </DockPanel>
+
+                                        <TextBlock Grid.Row="2" Text="Sessions" Style="{StaticResource Label}"/>
+                                        <ComboBox x:Name="WeekendBox" Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" VerticalAlignment="Center" SelectionChanged="Setting_Changed">
+                                            <ComboBoxItem Content="Race only, from the real grid" IsSelected="True"/>
+                                            <ComboBoxItem Content="Qualifying + race"/>
+                                            <ComboBoxItem Content="Practice + qualifying + race"/>
+                                        </ComboBox>
+
+                                        <TextBlock Grid.Row="3" Text="Race laps" Style="{StaticResource Label}"/>
+                                        <StackPanel Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBox x:Name="LapsBox" Width="60" Padding="8,5" TextChanged="Setting_Changed" HorizontalContentAlignment="Center"/>
+                                            <Button Content="25%" Style="{StaticResource SmallButton}" Margin="8,0,4,0" Click="Distance_Click" Tag="25"
+                                                    ToolTip="A quarter of the real race distance"/>
+                                            <Button Content="50%" Style="{StaticResource SmallButton}" Margin="0,0,4,0" Click="Distance_Click" Tag="50"/>
+                                            <Button Content="Full" Style="{StaticResource SmallButton}" Click="Distance_Click" Tag="100" ToolTip="The real race distance"/>
+                                            <TextBlock x:Name="DistanceText" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                        </StackPanel>
+
+                                        <TextBlock Grid.Row="4" Text="AI strength" Style="{StaticResource Label}"/>
+                                        <Slider x:Name="AiLevelSlider" Grid.Row="4" Grid.Column="1" Minimum="70" Maximum="100" VerticalAlignment="Center"
+                                                IsSnapToTickEnabled="True" TickFrequency="1" ValueChanged="Setting_Changed"
+                                                ToolTip="The fastest AI driver's level"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="2" Text="{Binding Value, ElementName=AiLevelSlider, StringFormat={}{0:0}%}"
+                                                   VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
+
+                                        <TextBlock Grid.Row="5" Text="Real skill" Style="{StaticResource Label}"/>
+                                        <CheckBox x:Name="RealSkillBox" Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2" VerticalAlignment="Center"
+                                                  Content="Each driver's AI level from their real result" Checked="Setting_Changed" Unchecked="Setting_Changed"/>
+
+                                        <TextBlock Grid.Row="6" Text="Skill spread" Style="{StaticResource Label}"/>
+                                        <Slider x:Name="SpreadSlider" Grid.Row="6" Grid.Column="1" Minimum="0" Maximum="15" VerticalAlignment="Center"
+                                                IsSnapToTickEnabled="True" TickFrequency="0.5" ValueChanged="Setting_Changed"
+                                                ToolTip="How much slower the last real driver is than the best (AI level points)"/>
+                                        <TextBlock Grid.Row="6" Grid.Column="2" Text="{Binding Value, ElementName=SpreadSlider, StringFormat=-{0:0.#}}"
+                                                   VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
+
+                                        <TextBlock Grid.Row="7" Text="AI aggression" Style="{StaticResource Label}"/>
+                                        <Slider x:Name="AiAggressionSlider" Grid.Row="7" Grid.Column="1" Minimum="0" Maximum="100" VerticalAlignment="Center"
+                                                IsSnapToTickEnabled="True" TickFrequency="1" ValueChanged="Setting_Changed"/>
+                                        <TextBlock Grid.Row="7" Grid.Column="2" Text="{Binding Value, ElementName=AiAggressionSlider, StringFormat={}{0:0}%}"
+                                                   VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
+
+                                        <TextBlock Grid.Row="8" Text="Time of day" Style="{StaticResource Label}"/>
+                                        <Slider x:Name="TimeSlider" Grid.Row="8" Grid.Column="1" Minimum="0" Maximum="23.75" VerticalAlignment="Center"
+                                                IsSnapToTickEnabled="True" TickFrequency="0.25" ValueChanged="Setting_Changed"/>
+                                        <TextBlock x:Name="TimeText" Grid.Row="8" Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
+
+                                        <TextBlock Grid.Row="9" Text="Weather" Style="{StaticResource Label}"/>
+                                        <ComboBox x:Name="WeatherBox" Grid.Row="9" Grid.Column="1" Grid.ColumnSpan="2" VerticalAlignment="Center" SelectionChanged="Setting_Changed"/>
+
+                                        <TextBlock Grid.Row="10" Text="Temperature" Style="{StaticResource Label}"/>
+                                        <Slider x:Name="TempSlider" Grid.Row="10" Grid.Column="1" Minimum="5" Maximum="40" VerticalAlignment="Center"
+                                                IsSnapToTickEnabled="True" TickFrequency="1" ValueChanged="Setting_Changed"/>
+                                        <TextBlock Grid.Row="10" Grid.Column="2" Text="{Binding Value, ElementName=TempSlider, StringFormat={}{0:0} °C}"
+                                                   VerticalAlignment="Center" HorizontalAlignment="Right" FontWeight="SemiBold"/>
+                                    </Grid>
+                                    <CheckBox x:Name="RealCondBox" Margin="0,10,0,0" Content="Use the real race-day weather and start time"
+                                              Checked="RealCond_Changed" Unchecked="RealCond_Changed"/>
+                                    <TextBlock x:Name="CondText" Foreground="{StaticResource Muted}" FontSize="11" Margin="27,3,0,0" TextWrapping="Wrap"/>
+                                    <CheckBox x:Name="StandInBox" Margin="0,10,0,0" Content="Fill missing real cars with stand-ins of the same class"
+                                              Checked="StandIn_Changed" Unchecked="StandIn_Changed"
+                                              ToolTip="The real cars stay in the missing list with their download links"/>
+                                    <CheckBox x:Name="SafetyCarBox" Margin="0,10,0,0" Checked="SafetyCar_Changed" Unchecked="SafetyCar_Changed"/>
+                                    <TextBlock x:Name="CompanionText" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                                    <CheckBox x:Name="SimCastBox" Margin="0,10,0,0" Visibility="Collapsed"
+                                              Content="Give SimCast's commentary the real race (grid, result, race day)"
+                                              ToolTip="Writes %APPDATA%\SimCast\race_context.json with each race, so the booth can talk about what really happened"/>
+                                    <CheckBox x:Name="StartSimCastBox" Margin="0,6,0,0" Visibility="Collapsed"
+                                              Content="Start SimCast with the race"
+                                              ToolTip="Opens SimCast when you press Start race, unless it's open already"/>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <!-- Missing content -->
+                        <Border x:Name="MissingCard" Style="{StaticResource CardBorder}" Background="#FFFCFB" BorderBrush="#F3CFCB" Visibility="Collapsed">
+                            <StackPanel>
+                                <DockPanel Margin="0,0,0,8">
+                                    <Button x:Name="AiMatchButton" Content="Find mine with AI" DockPanel.Dock="Right" Style="{StaticResource SmallButton}"
+                                            Click="AiMatch_Click" Margin="6,0,6,0"
+                                            ToolTip="Ask the AI whether any of your installed cars and tracks is one of these real ones (mods with odd names). You confirm before anything is used."/>
+                                    <Button x:Name="AiFindOnlineButton" Content="Find online with AI" DockPanel.Dock="Right" Style="{StaticResource SmallButton}"
+                                            Click="AiFindOnline_Click" Margin="6,0,0,0"
+                                            ToolTip="Ask OpenAI (searching the web) and DeepSeek for the best mods of these real cars and tracks. Links are checked before they're shown."/>
+                                    <TextBlock x:Name="MissingTitle" Style="{StaticResource CardTitle}" Foreground="{StaticResource Bad}" Margin="0" VerticalAlignment="Center"/>
+                                    <Button x:Name="GetAllButton" Content="Get all missing" DockPanel.Dock="Right" HorizontalAlignment="Right"
+                                            Style="{StaticResource SmallButton}" Click="GetAll_Click" Margin="0"
+                                            ToolTip="Direct links are downloaded and installed. overtake.gg pages open in your browser; archives you download are installed automatically."/>
+                                </DockPanel>
+                                <ItemsControl x:Name="MissingList">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,3">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="50"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="170"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <Button Grid.Column="5" Content="I have it…" Style="{StaticResource SmallButton}" Margin="6,0,0,0"
+                                                        Click="PickCar_Click" Tag="{Binding}" Visibility="{Binding PickVisibility}"
+                                                        ToolTip="Already installed but not recognised? Pick it from your installed cars."/>
+                                                <TextBlock Text="{Binding Kind}" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding Label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Grid.Column="2" Text="{Binding Where}" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center"/>
+                                                <Button Grid.Column="3" Content="Open" Style="{StaticResource SmallButton}" Margin="0" Click="OpenMissing_Click" Tag="{Binding}"/>
+                                                <Button Grid.Column="4" Content="Other sites ▾" Style="{StaticResource SmallButton}" Margin="6,0,0,0"
+                                                        Click="OtherSources_Click" Tag="{Binding}" Visibility="{Binding OtherSitesVisibility}"
+                                                        ToolTip="Search for it on other mod sites"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Grid -->
+                        <Border Style="{StaticResource CardBorder}">
+                            <StackPanel>
+                                <TextBlock x:Name="GridTitle" Style="{StaticResource CardTitle}"/>
+                                <Border x:Name="LiveryBar" Background="{StaticResource WarnSoft}" BorderBrush="#F0DDB4" BorderThickness="1" CornerRadius="10"
+                                        Padding="12,8" Margin="0,0,0,10" Visibility="Collapsed">
+                                    <DockPanel>
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Button x:Name="FindLiveriesButton" Content="Find liveries online" Style="{StaticResource SmallButton}" Click="FindLiveries_Click"
+                                                    ToolTip="Opens a livery search for these cars; livery packs you download are installed automatically"/>
+                                            <Button x:Name="GenerateLiveriesButton" Content="Generate liveries" Style="{StaticResource SmallButton}" Click="GenerateLiveries_Click"
+                                                    ToolTip="Makes a recoloured livery with the driver's name, number and team for each driver without one"/>
+                                            <Button x:Name="RemoveGeneratedButton" Content="Remove generated" Style="{StaticResource SmallButton}" Click="RemoveGenerated_Click" Margin="0"
+                                                    ToolTip="Deletes the liveries this program generated for these cars (folders starting with hr_)"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="LiveryText" TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    </DockPanel>
+                                </Border>
+                                <ListView x:Name="GridList" BorderThickness="0" ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                          PreviewMouseWheel="GridList_PreviewMouseWheel" ContextMenuOpening="GridList_ContextMenuOpening"
+                                          ToolTip="Right-click a car to choose which of your installed cars is used for it">
+                                    <ListView.ContextMenu><ContextMenu/></ListView.ContextMenu>
+                                    <ListView.ItemContainerStyle>
+                                        <Style TargetType="ListViewItem" BasedOn="{StaticResource RowStyle}">
+                                            <Setter Property="Background" Value="{Binding RowBrush}"/>
+                                            <Setter Property="Opacity" Value="{Binding RowOpacity}"/>
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                            <Setter Property="Padding" Value="2,4"/>
+                                            <Setter Property="ToolTip" Value="{Binding ToolTipText}"/>
+                                            <Setter Property="ToolTipService.IsEnabled" Value="{Binding IsStandIn}"/>
+                                        </Style>
+                                    </ListView.ItemContainerStyle>
+                                    <ListView.View>
+                                        <GridView>
+                                            <GridViewColumn Header="GRID" Width="54">
+                                                <GridViewColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Position}" FontFamily="{StaticResource DisplayFont}" FontSize="17"
+                                                                   FontWeight="Bold"/>
+                                                    </DataTemplate>
+                                                </GridViewColumn.CellTemplate>
+                                            </GridViewColumn>
+                                            <GridViewColumn Header="LIVERY" Width="104">
+                                                <GridViewColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <Border Width="92" Height="52" CornerRadius="6" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                                                                Background="{StaticResource Subtle}">
+                                                            <Border CornerRadius="5">
+                                                                <Border.Background>
+                                                                    <ImageBrush ImageSource="{Binding Thumbnail}" Stretch="UniformToFill"/>
+                                                                </Border.Background>
+                                                            </Border>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </GridViewColumn.CellTemplate>
+                                            </GridViewColumn>
+                                            <GridViewColumn Header="NO." Width="48" DisplayMemberBinding="{Binding Number}"/>
+                                            <GridViewColumn Header="DRIVER" Width="180">
+                                                <GridViewColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding Driver}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                                                            <TextBlock Text="{Binding Team}" Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap"/>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </GridViewColumn.CellTemplate>
+                                            </GridViewColumn>
+                                            <GridViewColumn Header="CAR" Width="205">
+                                                <GridViewColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding RealCar}" TextWrapping="Wrap"/>
+                                                            <TextBlock Text="{Binding AcCar}" Foreground="{StaticResource Muted}" FontSize="11" TextWrapping="Wrap"/>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </GridViewColumn.CellTemplate>
+                                            </GridViewColumn>
+                                            <GridViewColumn Header="LIVERY FOLDER" Width="118" DisplayMemberBinding="{Binding Livery}"/>
+                                            <GridViewColumn x:Name="ClassColumn" Header="CLASS" Width="0" DisplayMemberBinding="{Binding Class}"/>
+                                            <GridViewColumn x:Name="RealResultColumn" Header="REAL RESULT" Width="84" DisplayMemberBinding="{Binding RealResult}"/>
+                                            <GridViewColumn Header="AI" Width="48" DisplayMemberBinding="{Binding AiText}"/>
+                                            <GridViewColumn Header="" Width="96">
+                                                <GridViewColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                                                    </DataTemplate>
+                                                </GridViewColumn.CellTemplate>
+                                            </GridViewColumn>
+                                        </GridView>
+                                    </ListView.View>
+                                </ListView>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Action bar -->
+                <Border x:Name="ActionBar" Grid.Row="1" Style="{StaticResource CardBorder}" Visibility="Collapsed" Padding="18,12" Margin="0,4,10,18">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <CheckBox x:Name="WatchBox" Content="Watch only (AI drives every car)" VerticalAlignment="Center" Margin="0,0,18,0"
+                                      Checked="Watch_Changed" Unchecked="Watch_Changed"/>
+                            <Button x:Name="WriteButton" Content="Write to Assetto Corsa" Click="Write_Click"
+                                    ToolTip="Write this race into Documents\Assetto Corsa\cfg\race.ini (backed up first)"/>
+                            <Button x:Name="CmButton" Content="Add to Content Manager" Click="Cm_Click"
+                                    ToolTip="Save this race as a Content Manager Quick Drive preset (and its grid as a Race Grids preset), under Historic Roster"/>
+                            <Button x:Name="StartButton" Content="▶  Start race" Style="{StaticResource PrimaryButton}" Click="Start_Click" Margin="4,0,0,0"
+                                    FontSize="14"/>
+                        </StackPanel>
+                        <TextBlock x:Name="ActionText" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,16,0" Foreground="{StaticResource Muted}"
+                                   FontSize="12" LineHeight="17"/>
+                    </DockPanel>
+                </Border>
+            </Grid>
+        </Grid>
+
+        <!-- ============================== Activity ============================== -->
+        <Border Grid.Row="2" Background="{StaticResource Card}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="14,6">
+            <DockPanel>
+                <DockPanel DockPanel.Dock="Top">
+                    <ProgressBar x:Name="Busy" DockPanel.Dock="Right" Width="160" Height="4" IsIndeterminate="True" Visibility="Hidden" VerticalAlignment="Center"
+                                 Margin="10,0,0,0"/>
+                    <TextBlock x:Name="InstallText" DockPanel.Dock="Right" Foreground="{StaticResource Muted}" FontSize="11.5" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" MaxWidth="560" Margin="12,0,4,0"/>
+                    <Button DockPanel.Dock="Right" Content="✦ Ask AI about this" Style="{StaticResource GhostButton}" Click="AskAiLog_Click"
+                            ToolTip="Ask the AI to explain the activity log (errors, warnings) and what to do"/>
+                    <Button x:Name="CancelButton" DockPanel.Dock="Right" Content="Cancel" Style="{StaticResource SmallButton}" Visibility="Collapsed" Click="Cancel_Click"/>
+                    <ToggleButton x:Name="LogToggle" Content="Activity" Style="{StaticResource ChipToggle}" Checked="LogToggle_Changed" Unchecked="LogToggle_Changed"
+                                  HorizontalAlignment="Left"/>
+                    <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="10,0" TextTrimming="CharacterEllipsis" Foreground="{StaticResource Muted}"/>
+                </DockPanel>
+                <TextBox x:Name="LogBox" Height="160" Margin="0,6,0,6" IsReadOnly="True" FontFamily="Cascadia Mono, Consolas" FontSize="12"
+                         VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" Visibility="Collapsed"/>
+            </DockPanel>
+        </Border>
+    </Grid>
+</Window>

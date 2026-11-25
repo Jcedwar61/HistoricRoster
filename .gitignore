@@ -1,5 +1,18 @@
+# Only the Historic Roster project is tracked; everything else in this folder stays local.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/App/
+!/Core/
+!/RosterTool/
+!/CspApp/
+!/HistoricRosterPlugin/
+!/installer/
+
+# Build output
 bin/
 obj/
-.vs/
 *.user
 *.suo
+.vs/
