@@ -3,11 +3,22 @@
 Recreate real races from 1996 to today in Assetto Corsa: F1, GT1, LMP1, GT3 and NASCAR.
 Real grids, real cars, real tracks.
 
+**Download:** get `HistoricRosterSetup.exe` from the
+[latest release](https://github.com/Jcedwar61/HistoricRosterPlugin/releases/latest) (Windows, 64-bit).
+
 **Start here: the Historic Roster program.** Run `HistoricRosterSetup.exe` to install it (no
 administrator rights needed), open **Historic Roster** from the Start menu or desktop, pick a real
 race, check the whole setup, and press **Start race**. See
 [The Historic Roster program](#the-historic-roster-program) below. The rest of this guide covers
 hosting online, the command line, and the details.
+
+![A race selected in Historic Roster: track preview, race settings and the Start race button](docs/screenshots/race-setup.png)
+
+![The race list: every real race, with how many of its cars you have installed](docs/screenshots/race-list.png)
+
+**Building it yourself:** install the .NET 8 SDK and [NSIS 3](https://nsis.sourceforge.io), put the race
+database at `rosters/historic_rosters_db.json` (made with RosterTool), then run
+`installer/build.ps1`. It writes `dist/HistoricRosterSetup.exe`.
 
 Contents:
 
