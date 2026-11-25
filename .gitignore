@@ -9,6 +9,7 @@
 !/CspApp/
 !/HistoricRosterPlugin/
 !/installer/
+!/docs/
 
 # Build output
 bin/
