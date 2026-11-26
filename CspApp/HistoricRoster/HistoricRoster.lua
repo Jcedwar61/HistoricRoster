@@ -570,6 +570,21 @@ local function ourRaceConfig()
   return cfg
 end
 
+-- The seat picked for a watched race, which the camera starts on (race.ini CAR_n index). It's not always CAR_0: AC
+-- opens its pit menu for CAR_0 whenever that car pits, so the program gives CAR_0 to a car that never retires.
+local cameraSeat = nil
+local function cameraCar()
+  if cameraSeat then return cameraSeat end
+  cameraSeat = 0
+  local cfg = ourRaceConfig()
+  if cfg then
+    local ok, v = pcall(function() return cfg:get('HISTORIC_ROSTER', 'CAMERA_CAR', 0) end)
+    local n = ok and tonumber(v)
+    if n and n >= 0 and n < ac.getSim().carsCount then cameraSeat = math.floor(n) end
+  end
+  return cameraSeat
+end
+
 local function readWatchFlag()
   local cfg = ourRaceConfig()
   if not cfg then return false end
@@ -1026,10 +1041,11 @@ local function chooseTarget(dt)
   -- had started: a restart, so the start again.)
   if watch.wasStarted and not sim.isSessionStarted then watch.fresh = true end
   watch.wasStarted = sim.isSessionStarted
-  if watch.fresh and watch.follow ~= 'leader' and not skip and isRaceCar(0) and ac.getCar(0)
+  local seat = cameraCar()
+  if watch.fresh and watch.follow ~= 'leader' and not skip and isRaceCar(seat) and ac.getCar(seat)
     and (not sim.isSessionStarted or (director.raceClock or 0) < 12) then
-    local _, partner = stillFighting(order, 0)
-    return setTarget(0, partner)
+    local _, partner = stillFighting(order, seat)
+    return setTarget(seat, partner)
   end
   watch.fresh = false
 
@@ -1125,8 +1141,9 @@ local function loadRealResult()
     local pos = num('CAR_' .. i .. '_POS', -1)
     if pos >= 0 then
       local e = { pos = pos, laps = num('CAR_' .. i .. '_LAPS', 0) }
-      if pos == 0 and real.realLaps > 0 and real.raceLaps > 0 then
-        -- Retire at the same share of the race distance as in reality (never right on the grid).
+      if pos == 0 and real.realLaps > 0 and real.raceLaps > 0 and i ~= 0 then
+        -- Retire at the same share of the race distance as in reality (never right on the grid). Never the user's car
+        -- (CAR_0): AC would open its pit menu for it; the program makes it a car that finished.
         e.retireAt = math.max(0.4, e.laps / real.realLaps * real.raceLaps)
       end
       real.cars[i] = e
@@ -2197,6 +2214,14 @@ function script.update(dt)
     else
       setAutopilot(true)
     end
+  end
+
+  -- The user's car (CAR_0) never pits while the AI drives it: AC opens its pit menu for that car and waits for you.
+  -- Kept fuelled instead, so it never has to. (Driving it yourself, you pit as usual.)
+  if car and not userDriving() and car.isAIControlled then
+    try(physics, 'setAIPitStopRequest', 0, false)
+    local fuel, maxFuel = field(car, 'fuel'), field(car, 'maxFuel')
+    if fuel and maxFuel and maxFuel > 0 and fuel < maxFuel * 0.3 then try(physics, 'setCarFuel', 0, maxFuel) end
   end
 
   -- Every car with its headlights on, as on TV (CSP scene tweak; the object is kept so the setting stays). Another

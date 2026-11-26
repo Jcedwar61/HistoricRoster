@@ -51,7 +51,7 @@ public class LastRace
         RosterId = setup.Roster.Id,
         RosterName = setup.Roster.Name,
         TrackFolder = setup.Track.Folder ?? "",
-        PlayerSeat = setup.Player.Driver,
+        PlayerSeat = RaceIniWriter.UserCar(setup).Driver, // CAR_0 (in a watched race, the best real finisher)
         PlayerName = string.IsNullOrWhiteSpace(setup.PlayerName) ? null : setup.PlayerName.Trim(),
         WrittenUtc = DateTime.UtcNow,
         SeasonKey = setup.Watch ? null : seasonKey,

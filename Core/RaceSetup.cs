@@ -375,15 +375,28 @@ public static class RaceIniWriter
     }
 
     /// <summary>
-    /// The cars in race.ini order: index i is [CAR_i] (and the AC car id). The player is CAR_0, then the grid in order,
-    /// the Safety Car last. SimCastContext uses the same indexes, so keep this the only place that decides them.
+    /// The cars in race.ini order: index i is [CAR_i] (and the AC car id). CAR_0 is the user's car (<see cref="UserCar"/>),
+    /// then the grid in order, the Safety Car last. SimCastContext uses the same indexes, so keep this the only place
+    /// that decides them.
     /// </summary>
     public static List<RaceSlot> CarOrder(RaceSetup setup)
     {
-        var cars = new List<RaceSlot> { setup.Player };
-        cars.AddRange(setup.Grid.Where(s => !s.IsPlayer).OrderBy(s => s.IsSafetyCar ? 1 : 0).ThenBy(s => s.GridPosition));
+        var first = UserCar(setup);
+        var cars = new List<RaceSlot> { first };
+        cars.AddRange(setup.Grid.Where(s => !ReferenceEquals(s, first)).OrderBy(s => s.IsSafetyCar ? 1 : 0).ThenBy(s => s.GridPosition));
         return cars;
     }
+
+    /// <summary>
+    /// The car AC gives the user (CAR_0). Racing: your seat. Watching: the best real finisher, whatever seat the camera
+    /// starts on ([HISTORIC_ROSTER] CAMERA_CAR). AC treats CAR_0 as the player's car even with the autopilot driving it:
+    /// a pit stop there opens AC's pit menu and waits for you. So CAR_0 is a car that never retires, and the in-game app
+    /// keeps it out of the pits; every other car (your seat's driver too) pits and retires on its own like any AI car.
+    /// </summary>
+    public static RaceSlot UserCar(RaceSetup setup)
+        => setup.Watch
+            ? setup.Grid.Where(s => !s.IsSafetyCar && s.Car.Entry.Position is > 0).OrderBy(s => s.Car.Entry.Position).FirstOrDefault() ?? setup.Player
+            : setup.Player;
 
     public static string Write(RaceSetup setup, string racePath)
     {
@@ -407,10 +420,13 @@ public static class RaceIniWriter
             ini.Set(WatchSection, "PLAYER_NATIONALITY", myNation ?? "");
         }
 
-        var player = setup.Player;
         var cars = CarOrder(setup);
+        var player = cars[0]; // the user's car (in a watched race, not necessarily the seat picked)
         var raceCars = setup.Grid.Where(s => !s.IsSafetyCar).ToList();
         string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+        // Watching: the car the camera starts on (the seat picked), by race.ini CAR_n index.
+        if (setup.Watch) ini.Set(WatchSection, "CAMERA_CAR", cars.IndexOf(setup.Player).ToString(CultureInfo.InvariantCulture));
 
         // Which race this section belongs to. Content Manager keeps sections it doesn't know when it writes race.ini for
         // another race, so the in-game app only uses this section while the loaded track and car count match these.

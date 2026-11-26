@@ -158,7 +158,7 @@ public static class SimCastContext
                 Night = c.IsNight,
                 Summary = c.Describe(),
             },
-            Player = new PlayerPart { CarIndex = 0, SeatDriver = s.Player.Car.Entry.Driver },
+            Player = new PlayerPart { CarIndex = 0, SeatDriver = cars[0].Car.Entry.Driver },
             Grid = cars.Select((slot, i) => (slot, i)).Where(x => !x.slot.IsSafetyCar).Select(x =>
             {
                 var e = x.slot.Car.Entry;
