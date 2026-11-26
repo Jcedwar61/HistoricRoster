@@ -412,6 +412,11 @@ public static class RaceIniWriter
         var raceCars = setup.Grid.Where(s => !s.IsSafetyCar).ToList();
         string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
 
+        // Which race this section belongs to. Content Manager keeps sections it doesn't know when it writes race.ini for
+        // another race, so the in-game app only uses this section while the loaded track and car count match these.
+        ini.Set(WatchSection, "TRACK", setup.Track.Folder!);
+        ini.Set(WatchSection, "CARS", cars.Count.ToString(CultureInfo.InvariantCulture));
+
         // The Safety Car, in every race: the in-game app keeps it in the pits when AdvancedAI isn't running it (AC
         // would race it like any other AI car) and never films it.
         var safetyIndex = cars.FindIndex(s => s.IsSafetyCar);

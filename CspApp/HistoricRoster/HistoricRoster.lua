@@ -545,9 +545,34 @@ local ideal = { wasOn = nil, timer = 0, tries = 0 }
 local UP = vec3(0, 1, 0)
 local DOWN = vec3(0, -1, 0)
 
-local function readWatchFlag()
+-- race.ini, when its [HISTORIC_ROSTER] section belongs to the race that's loaded; nil otherwise. Content Manager keeps
+-- sections it doesn't know when it writes race.ini for another race, and that race must never get this one's watch
+-- flag, Safety Car, classes or real result. The program writes the race's track and car count there to tell. Offline
+-- only: online, race.ini isn't ours. Checked once (AC reads race.ini once, when it starts).
+local ourRace = { checked = false, cfg = nil }
+local function ourRaceConfig()
+  if ourRace.checked then return ourRace.cfg end
+  ourRace.checked = true
+  local sim = ac.getSim()
+  if sim.isOnlineRace then return nil end
   local ok, cfg = try(ac.INIConfig, 'raceConfig')
-  if not ok or not cfg then return false end
+  if not ok or not cfg then return nil end
+  local function str(key)
+    local ok2, v = pcall(function() return cfg:get('HISTORIC_ROSTER', key, '') end)
+    return ok2 and type(v) == 'string' and v or ''
+  end
+  if tonumber(str('CARS')) ~= sim.carsCount then return nil end
+  local track = str('TRACK'):lower()
+  if track == '' then return nil end
+  local okId, id = try(ac, 'getTrackID')
+  if okId and type(id) == 'string' and id:lower() ~= track then return nil end
+  ourRace.cfg = cfg
+  return cfg
+end
+
+local function readWatchFlag()
+  local cfg = ourRaceConfig()
+  if not cfg then return false end
   local ok2, v = pcall(function() return cfg:get('HISTORIC_ROSTER', 'WATCH', 0) end)
   return ok2 and tonumber(v) == 1
 end
@@ -569,8 +594,8 @@ end
 local raceCars = { loaded = false, safety = {} }
 local function loadRaceCars()
   raceCars.loaded = true
-  local ok, cfg = try(ac.INIConfig, 'raceConfig')
-  if ok and cfg then
+  local cfg = ourRaceConfig()
+  if cfg then
     local ok2, v = pcall(function() return cfg:get('HISTORIC_ROSTER', 'SAFETY_CAR', -1) end)
     if ok2 and tonumber(v) and tonumber(v) >= 0 then raceCars.safety[tonumber(v)] = true end
   end
@@ -590,9 +615,8 @@ end
 local classes = { loaded = false, list = {}, of = {} }
 local function loadClasses()
   classes.loaded = true
-  if ac.getSim().isOnlineRace then return end
-  local ok, cfg = try(ac.INIConfig, 'raceConfig')
-  if not ok or not cfg then return end
+  local cfg = ourRaceConfig()
+  if not cfg then return end
   local function str(key)
     local ok2, v = pcall(function() return cfg:get('HISTORIC_ROSTER', key, '') end)
     return ok2 and type(v) == 'string' and v ~= '' and v or nil
@@ -674,8 +698,8 @@ local function raceLaps()
     local ok, s = try(ac, 'getSession', sim.currentSessionIndex)
     local n = ok and s and tonumber(field(s, 'laps')) or 0
     if n <= 0 then
-      local ok2, cfg = try(ac.INIConfig, 'raceConfig')
-      if ok2 and cfg then
+      local cfg = ourRaceConfig()
+      if cfg then
         local ok3, v = pcall(function() return cfg:get('HISTORIC_ROSTER', 'RACE_LAPS', 0) end)
         n = ok3 and tonumber(v) or 0
       end
@@ -1088,8 +1112,8 @@ local real = {
 
 local function loadRealResult()
   real.loaded = true
-  local ok, cfg = try(ac.INIConfig, 'raceConfig')
-  if not ok or not cfg then return end
+  local cfg = ourRaceConfig()
+  if not cfg then return end
   local function num(key, default)
     local ok2, v = pcall(function() return cfg:get('HISTORIC_ROSTER', key, default) end)
     return ok2 and tonumber(v) or default
