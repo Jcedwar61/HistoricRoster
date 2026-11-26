@@ -1198,6 +1198,9 @@ local function steerToRealResult()
   for i, e in pairs(real.cars) do
     local c = ac.getCar(i)
     if c and not e.retired then
+      -- AC retires an AI car that stops moving (a first-lap tangle, say), and preventAIFromRetiring only holds it off
+      -- for a while: so it's renewed every tick for every car not yet due to retire as it did in real life.
+      if not e.pitting then pcall(physics.preventAIFromRetiring, i) end
       local level = field(c, 'aiLevel')
       if e.baseLevel == nil and level and level > 0 then e.baseLevel = level end
       local run = lapsRun(c, e)
@@ -2213,6 +2216,19 @@ function script.update(dt)
       try(ac, 'setMessage', 'Historic Roster', 'Autopilot off: you are driving. "Let AI drive" in the Historic Roster window hands the car back.')
     else
       setAutopilot(true)
+    end
+  end
+
+  -- CAR_0's real driver: Content Manager, starting the race, puts its own player's name and flag on CAR_0.
+  if not watch.nameSet then
+    watch.nameSet = true
+    local cfg = ourRaceConfig()
+    if cfg then
+      local okN, name = pcall(function() return cfg:get('HISTORIC_ROSTER', 'CAR0_NAME', '') end)
+      local okC, code = pcall(function() return cfg:get('HISTORIC_ROSTER', 'CAR0_NATION', '') end)
+      if okN and type(name) == 'string' and name ~= '' and ac.getDriverName(0) ~= name then
+        try(physics, 'setDriverName', name, okC and type(code) == 'string' and #code == 3 and code or nil)
+      end
     end
   end
 

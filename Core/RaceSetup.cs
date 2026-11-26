@@ -425,8 +425,15 @@ public static class RaceIniWriter
         var raceCars = setup.Grid.Where(s => !s.IsSafetyCar).ToList();
         string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
 
-        // Watching: the car the camera starts on (the seat picked), by race.ini CAR_n index.
-        if (setup.Watch) ini.Set(WatchSection, "CAMERA_CAR", cars.IndexOf(setup.Player).ToString(CultureInfo.InvariantCulture));
+        // Watching: the car the camera starts on (the seat picked), by race.ini CAR_n index. And CAR_0's real driver:
+        // Content Manager, starting the race, replaces CAR_0's name and nationality with its own player's, so the
+        // in-game app puts the real ones back (CSP splits INI values at commas: none here).
+        if (setup.Watch)
+        {
+            ini.Set(WatchSection, "CAMERA_CAR", cars.IndexOf(setup.Player).ToString(CultureInfo.InvariantCulture));
+            ini.Set(WatchSection, "CAR0_NAME", player.Driver.Replace(",", " ").Trim());
+            if (NationCodes.Of(player.Car.Entry.Nation) is { } code) ini.Set(WatchSection, "CAR0_NATION", code);
+        }
 
         // Which race this section belongs to. Content Manager keeps sections it doesn't know when it writes race.ini for
         // another race, so the in-game app only uses this section while the loaded track and car count match these.
@@ -774,5 +781,31 @@ public static class AcLauncher
         if (LaunchViaContentManager(raceIniPath)) return "through Content Manager";
         Launch(acRoot);
         return "directly (Content Manager isn't installed)";
+    }
+}
+
+/// <summary>AC's three-letter nation codes (ac.NationCode) for the nationalities in the race data.</summary>
+public static class NationCodes
+{
+    private static readonly Dictionary<string, string> ByNationality = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["British"] = "GBR", ["English"] = "GBR", ["Scottish"] = "GBR", ["Welsh"] = "GBR", ["Italian"] = "ITA",
+        ["French"] = "FRA", ["German"] = "DEU", ["East German"] = "DEU", ["Brazilian"] = "BRA", ["American"] = "USA",
+        ["Finnish"] = "FIN", ["Spanish"] = "ESP", ["Australian"] = "AUS", ["Japanese"] = "JPN", ["Austrian"] = "AUT",
+        ["Dutch"] = "NLD", ["Canadian"] = "CAN", ["Belgian"] = "BEL", ["Mexican"] = "MEX", ["Swedish"] = "SWE",
+        ["Swiss"] = "CHE", ["New Zealander"] = "NZL", ["Argentine"] = "ARG", ["Argentinian"] = "ARG", ["Monegasque"] = "MCO",
+        ["Danish"] = "DNK", ["Russian"] = "RUS", ["South African"] = "ZAF", ["Thai"] = "THA", ["Colombian"] = "COL",
+        ["Venezuelan"] = "VEN", ["Polish"] = "POL", ["Portuguese"] = "PRT", ["Chinese"] = "CHN", ["Irish"] = "IRL",
+        ["Indian"] = "IND", ["Chilean"] = "CHL", ["Hungarian"] = "HUN", ["Rhodesian"] = "ZWE", ["Malaysian"] = "MYS",
+        ["Indonesian"] = "IDN", ["Liechtensteiner"] = "LIE", ["Uruguayan"] = "URY", ["Czech"] = "CZE",
+    };
+
+    /// <summary>The code for a nationality ("French" → "FRA"); a three-letter code is kept as it is; null when unknown.</summary>
+    public static string? Of(string? nationality)
+    {
+        if (string.IsNullOrWhiteSpace(nationality)) return null;
+        var n = nationality.Trim();
+        if (ByNationality.TryGetValue(n, out var code)) return code;
+        return n.Length == 3 && n.All(char.IsLetter) ? n.ToUpperInvariant() : null;
     }
 }
