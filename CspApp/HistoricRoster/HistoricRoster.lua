@@ -1248,7 +1248,14 @@ local function steerToRealResult()
     else
       pcall(physics.setAIThrottleLimit, r.i, 1)
     end
-    pcall(physics.disableCarCollisions, r.i, final and err ~= 0)
+    -- Cars out of place may pass through each other late in the race, but only where nobody sees it: never the car
+    -- being filmed or its rival, and only more than 250 m from the camera.
+    local hidden = r.i ~= watch.target and r.i ~= watch.partner
+    if hidden then
+      local okCam, cam = try(ac, 'getCameraPosition')
+      hidden = okCam and cam ~= nil and r.c.position ~= nil and r.c.position:distance(cam) > 250
+    end
+    pcall(physics.disableCarCollisions, r.i, final and err ~= 0 and hidden)
   end
 end
 
@@ -2210,6 +2217,7 @@ function script.update(dt)
   if sim.currentSessionIndex ~= watch.session then
     watch.session = sim.currentSessionIndex
     watch.engaged, watch.userOff = false, false
+    watch.raced0, watch.stuck0 = false, 0
     -- Each session is filmed afresh: laps, the flag, who has been shown; a race starts on your seat again.
     watch.fresh, watch.lastShown, watch.targetHeld = true, {}, 99
     for k in pairs(lapState) do lapState[k] = nil end
@@ -2259,19 +2267,44 @@ function script.update(dt)
     local life = field(car, 'engineLifeLeft')
     if life and life < 1000 then try(physics, 'setCarEngineLife', 0, 1000) end
     -- Stuck after a spin or a tangle: AdvancedAI recovers AI cars, but nothing recovers the user's car, and AC never
-    -- retires it. After 10 s standing still on track, it's put back on the racing line where it was.
-    if sim.isSessionStarted and not field(car, 'isInPitlane') and (car.speedKmh or 0) < 5 then
+    -- retires it. After 10 s standing still on track, it's put back on the racing line where it was, at a spot with no
+    -- car within 25 m. Only once it has been racing (a session counts as started while the grid still waits for the
+    -- lights, and putting it on the line then lands it on the car ahead).
+    if not sim.isSessionStarted then watch.raced0 = false end -- (back on the grid: a restart)
+    if (car.speedKmh or 0) > 40 then watch.raced0 = true end
+    if watch.raced0 and sim.isSessionStarted and not field(car, 'isInPitlane') and (car.speedKmh or 0) < 5 then
       watch.stuck0 = (watch.stuck0 or 0) + step
     else
       watch.stuck0 = 0
     end
     if watch.stuck0 > 10 then
       watch.stuck0 = 0
-      local ok, pos = try(ac, 'trackProgressToWorldCoordinate', ((car.splinePosition or 0) + 0.002) % 1)
-      if ok and pos and try(physics, 'setCarPosition', 0, pos, nil) then try(physics, 'setCarVelocity', 0, vec3(0, 0, 0)) end
+      local len = math.max(field(sim, 'trackLengthM') or 5000, 500)
+      for k = 1, 12 do
+        local ok, pos = try(ac, 'trackProgressToWorldCoordinate', ((car.splinePosition or 0) + k * 10 / len) % 1)
+        local clear = ok and pos ~= nil
+        for j = 1, sim.carsCount - 1 do
+          local other = clear and ac.getCar(j)
+          if other and other.position and other.position:distance(pos) < 25 then clear = false end
+        end
+        if clear then
+          if try(physics, 'setCarPosition', 0, pos, nil) then try(physics, 'setCarVelocity', 0, vec3(0, 0, 0)) end
+          break
+        end
+      end
     end
     local fuel, maxFuel = field(car, 'fuel'), field(car, 'maxFuel')
     if fuel and maxFuel and maxFuel > 0 and fuel < maxFuel * 0.3 then try(physics, 'setCarFuel', 0, maxFuel) end
+  end
+
+  -- A watched race has no driver: none of AC's HUD for the user's car (fuel, damage, proximity radar, wrong way, the
+  -- quick pit menu, the virtual mirror) and none of its messages to the user (penalties, cuts, slow-downs).
+  if not watch.spectating then
+    watch.spectating = true
+    try(ac, 'disableExtraHUDElements', { 'fuel', 'damage', 'proximity', 'wrongWay', 'quickPitsMenu', 'virtualMirror' }, true)
+    local ok, block = try(ac, 'blockSystemMessages',
+      'PENALTY|SLOW DOWN|CUT DETECTED|LAP WILL NOT COUNT|DRIVE.?THROUGH|STOP.?&.?GO|STOP AND GO|JUMP.?START|DISQUALIFIED')
+    if ok then watch.messageBlock = block end -- (kept: the block lasts while the disposable lives)
   end
 
   -- Every car with its headlights on, as on TV (CSP scene tweak; the object is kept so the setting stays). Another
