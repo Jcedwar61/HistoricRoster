@@ -81,8 +81,9 @@ installed and that have real cars or stand-ins. Each race shows how many of its 
     Only the circuit's position (or town) and the race date are sent.
   - *Fill missing real cars with stand-ins:* a real car you don't have is replaced by an installed
     car of the same class (F1 for F1, GT1 for GT1), so the grid stays full. The stand-in is the
-    car a team-mate drives in this race if you have it, else a car of the same make or team,
-    from the closest year, with that driver's livery when the car has one. Team-mates share a
+    car a team-mate drives in this race if you have it, else the installed car closest in year (so
+    the field runs at one pace: a 2017 car is no stand-in for a 1982 one), preferring the same make
+    or team within about a decade, with that driver's livery when the car has one. Team-mates share a
     stand-in. The real car stays in the missing list with its download link.
 - **Starting grid:** every car with its livery picture, number, driver, team, the real car and its
   AC folder, the livery folder, the driver's real result and AI level. Your car is highlighted;
@@ -191,8 +192,14 @@ question), and only when you use a feature. AI can get facts wrong.
 
 Both are offline CSP apps, and the race the program writes is made to work with them:
 
-- **AdvancedAI** reads each session's type from `race.ini` to pick its preset and take over the
-  AI; the program writes proper Practice / Qualifying / Race sessions. For races, AdvancedAI wants
+- **AdvancedAI** drives the AI cars in place of Kunos's stock AI and applies its racing rules and
+  penalties. It reads each session's type from `race.ini`; the program writes proper Practice /
+  Qualifying / Race sessions. Before a watched race the program patches AdvancedAI (a few lines;
+  the originals are kept as `*.hr-orig`) so that **in a watched race only** it never retires or
+  disqualifies a car (cars finish or retire as they did in real life), never sends a stuck car to
+  its pit box (a lap lost), and leaves your car alone: no penalties, flags, panel, messages or
+  beeps for it. An AdvancedAI version the program doesn't know (after an AdvancedAI update) is
+  left unpatched, and the Activity log says so. For races, AdvancedAI wants
   its Safety Car model on the grid (default `ferrari_458_s3`; the program reads your AdvancedAI
   setting). **Add AdvancedAI Safety Car** (off by default, because AI behaviour around it can be
   unreliable) puts it at the back of the grid, using a livery with
@@ -202,13 +209,14 @@ Both are offline CSP apps, and the race the program writes is made to work with 
   and only sends it out to neutralise the race; the Historic Roster in-game app leaves it alone.
   With AdvancedAI switched off in its own settings, the in-game app parks it in its pit box for the
   whole session, and Assetto Corsa says *Safety Car kept in its pit box*. The app tells the two
-  apart from AdvancedAI's journal (`Documents\Assetto Corsa\logs\AdvancedIA.log`). If that
+  apart from AdvancedAI's journal, which also says whether its Accidents section (where the Safety
+  Car lives) is on: without it AdvancedAI doesn't run the Safety Car, so the app parks it. It reads `Documents\Assetto Corsa\logs\AdvancedIA.log`. If that
   journal is switched off, the app parks the Safety Car only once it has raced for 10 seconds
   without having been in the pits (in practice and qualifying, 3 seconds on track).
 - **Stretched Grid** reads the first session's type and, for a race, `STARTING_POSITION` from
   `race.ini`. The program writes your driver's real grid slot there, so Stretched Grid places you
   correctly. With qualifying first, your slot comes from qualifying.
-- Neither app is touched or configured by the program. Both only work offline, so the server
+- Stretched Grid isn't touched. Both apps only work offline, so the server
   plugin and the in-game app (online) don't interfere with them.
 - The grid is limited to the track's pit boxes (Assetto Corsa's own limit). The Safety Car is added on top of the real grid and never takes a real car's place: if every pit box is used by a real car, or a real car uses the Safety Car model, no Safety Car is added and the program says so (AdvancedAI then uses a VSC/FCY).
 
@@ -473,7 +481,12 @@ entry list.
 
 **Watching an AI race.** Tick **Watch only (AI drives every car)** next to the Start button (or
 `RosterTool race <id> --watch`). Every car is driven by the AI, the seat you picked included,
-and **every driver keeps their real name**; your name isn't used. The camera starts on the seat
+and **every driver keeps their real name**; your name isn't used. The car Assetto Corsa treats
+as yours goes to the real winner, a car that never retires or pits, so AC never stops for its pit
+menu; the camera still starts on the seat you picked. **A watched race has no driver:** AC's HUD for
+your car (fuel, damage, proximity radar, wrong way, pit menu, mirror) and its messages to you are
+hidden, and while the race runs the program mutes CrewChief, SimHub and similar programs until the
+game closes (SimCast and SimCoach keep their sound). The camera starts on the seat
 you picked, on the TV cameras. It needs Custom Shaders Patch: the Historic Roster in-game app
 (installed or updated automatically by the program) switches on CSP's autopilot for that car
 when the race loads. Open the app from the apps sidebar for its **Watch** tab:
@@ -528,10 +541,13 @@ when the race loads. Open the app from the apps sidebar for its **Watch** tab:
   drive** hands it back.
 
 **A watched race finishes as it did in real life.** The in-game app steers every car to its real
-finishing position: it nudges each car's pace (AI level and grip) toward its real place among the
-cars still running, gently at first and firmly in the last quarter of the race. Then cars still
-out of place lose their collisions so they can get past cleanly, and cars too far forward are held
-back. Cars that really retired go into the pits at the same point of the race (scaled to your
+finishing position: it nudges each car's pace (AI level, and extra grip for cars too far back; never
+less grip, which makes the AI go off) toward its real place among the cars still running, gently
+at first and firmly in the last quarter of the race. Then cars still out of place lose their
+collisions so they can get past cleanly, but only out of shot (never the car being filmed or its
+rival, and only far from the camera), and cars too far forward are held back. A car stuck on track
+after a spin is put back on the racing line where it was after 8 seconds, out of shot, so it
+doesn't lose laps, and no car that finished in real life is retired by AC. Cars that really retired go into the pits at the same point of the race (scaled to your
 race length) and park there, and AC's own random AI retirements are switched off. The Watch tab
 shows how many cars are still out of their real place, and **Finish as in real life** turns it
 off. Keep AdvancedAI switched on (in its own window): it drives the AI cars in place of Kunos's
