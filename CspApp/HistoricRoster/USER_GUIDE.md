@@ -198,11 +198,13 @@ Both are offline CSP apps, and the race the program writes is made to work with 
   unreliable) puts it at the back of the grid, using a livery with
   "safety" in its name when the car has one. It's optional: untick it for a race without a Safety
   Car (AdvancedAI then uses a VSC or FCY). The choice is saved as soon as you change it.
-  **The Safety Car never races.** AdvancedAI parks it in its pit box when the session loads and
-  only sends it out to neutralise the race. If AdvancedAI isn't running it (switched off in its own
-  settings, for example), the Historic Roster in-game app parks it there instead: in the race when
-  it's still on the grid a second or two after the start, in practice and qualifying as soon as it
-  drives onto the track. Assetto Corsa then says *Safety Car kept in its pit box*.
+  **The Safety Car never races.** With AdvancedAI switched on, AdvancedAI keeps it in its pit box
+  and only sends it out to neutralise the race; the Historic Roster in-game app leaves it alone.
+  With AdvancedAI switched off in its own settings, the in-game app parks it in its pit box for the
+  whole session, and Assetto Corsa says *Safety Car kept in its pit box*. The app tells the two
+  apart from AdvancedAI's journal (`Documents\Assetto Corsa\logs\AdvancedIA.log`). If that
+  journal is switched off, the app parks the Safety Car only once it has raced for 10 seconds
+  without having been in the pits (in practice and qualifying, 3 seconds on track).
 - **Stretched Grid** reads the first session's type and, for a race, `STARTING_POSITION` from
   `race.ini`. The program writes your driver's real grid slot there, so Stretched Grid places you
   correctly. With qualifying first, your slot comes from qualifying.

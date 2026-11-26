@@ -1987,17 +1987,58 @@ local function updateDirector(dt)
 end
 
 -- ------------------------------------------------------------------ the Safety Car never races
--- The program can put AdvancedAI's Safety Car at the back of the grid. AdvancedAI parks it in its pit box as soon
--- as a session loads, and only sends it out to neutralise the race. When AdvancedAI isn't running it (switched off
--- in its own settings, or it never got hold of the car), Assetto Corsa races it like any other AI car. So, in every
--- offline session, driven or watched:
---  * race: a Safety Car that still hasn't been in the pit lane a second or two after the start (nothing took it off
---    the grid) is sent to its pit box and parked there for the rest of the race;
---  * practice and qualifying: a Safety Car that drives out onto the track is parked the same way.
--- A Safety Car AdvancedAI has parked is left to AdvancedAI, so it can still come out for a neutralisation.
-local safetyGuard = { timer = 0, session = -1, startedAt = nil, seenInPits = {}, parked = {}, noted = false }
+-- The program can put AdvancedAI's Safety Car at the back of the grid. With AdvancedAI switched on, AdvancedAI holds
+-- it in its pit box (with AC's own start delay) and sends it out only to neutralise the race: then the Safety Car is
+-- left entirely to AdvancedAI, and anything this app did to it is undone. With AdvancedAI switched off, Assetto Corsa
+-- would race it like any other AI car: then, in every offline session, driven or watched, it is sent to its pit box
+-- and parked there (no AI input).
+-- Whether AdvancedAI is on comes from its journal (Documents\Assetto Corsa\logs\AdvancedIA.log), where it writes a
+-- summary with its state ("garde disabled", "guard ready" ...) when a session starts and every minute. When that
+-- can't be told (journal switched off, a format this app doesn't know), the Safety Car is parked only once it's
+-- plainly racing: driving on track, out of the pit lane, for 10 s, without ever having been in the pits.
+local safetyGuard = { timer = 0, session = -1, startedAt = nil, seenInPits = {}, racing = {}, parked = {}, held = {}, noted = false }
 
-local function parkSafetyCar(i, c)
+-- AdvancedAI's state words: running the race, or not running it.
+local aiaOn = { ready = true, paused = true, finished = true, init = true, dt = true, replay = true }
+local aiaOff = { disabled = true, nosections = true, spline = true, panic = true }
+local aiaState = { value = nil, readAt = -1e9 }
+
+-- 'on', 'off', or nil when it can't be told: from AdvancedAI's latest summary in this launch, if under 150 s old.
+local function advancedAiState()
+  local now = clock()
+  if now - aiaState.readAt < (aiaState.value and 20 or 5) then return aiaState.value end
+  aiaState.readAt = now
+  local value = nil
+  pcall(function()
+    local f = io.open(ac.getFolder(ac.FolderID.Logs) .. '/AdvancedIA.log', 'rb')
+    if not f then return end
+    local size = f:seek('end') or 0
+    f:seek('set', math.max(0, size - 32768))
+    local text = f:read('*a') or ''
+    f:close()
+    local stamp, state
+    for line in text:gmatch('[^\r\n]+') do
+      if line:sub(1, 3) == '===' then
+        stamp, state = nil, nil -- a new launch: only its own summaries count
+      else
+        local s = line:match('[%s,|]garde (%a+)') or line:match('[%s,|]guard (%a+)')
+        local y, mo, d, h, mi, se = line:match('^(%d+)%-(%d+)%-(%d+) (%d+):(%d+):(%d+)')
+        if s and y then
+          stamp = os.time({ year = tonumber(y), month = tonumber(mo), day = tonumber(d),
+                            hour = tonumber(h), min = tonumber(mi), sec = tonumber(se) })
+          state = s
+        end
+      end
+    end
+    if state and stamp and math.abs(os.time() - stamp) <= 150 then
+      value = aiaOff[state] and 'off' or aiaOn[state] and 'on' or nil
+    end
+  end)
+  aiaState.value = value
+  return value
+end
+
+local function parkSafetyCar(i, c, why)
   local p = safetyGuard.parked[i]
   if not p then
     p = { since = clock() }
@@ -2007,11 +2048,20 @@ local function parkSafetyCar(i, c)
     if not p.teleported then try(physics, 'setAIPitStopRequest', i, true) end
     if not safetyGuard.noted then
       safetyGuard.noted = true
-      try(ac, 'setMessage', 'Historic Roster', 'Safety Car kept in its pit box: AdvancedAI isn\'t running it, so it would race like any other car.')
+      try(ac, 'setMessage', 'Historic Roster', 'Safety Car kept in its pit box: ' .. why)
     end
   end
   -- Held there (parked AI: no input) once it's in the pits, or after two minutes wherever it is.
-  if p.teleported or field(c, 'isInPit') or clock() - p.since > 120 then try(physics, 'setAINoInput', i, true, true) end
+  if p.teleported or field(c, 'isInPit') or clock() - p.since > 120 then
+    if try(physics, 'setAINoInput', i, true, true) then safetyGuard.held[i] = true end
+  end
+end
+
+-- AdvancedAI is running the Safety Car: hand it back exactly as AdvancedAI expects it.
+local function releaseSafetyCar(i)
+  if safetyGuard.held[i] then try(physics, 'setAINoInput', i, false) end
+  if safetyGuard.parked[i] and not safetyGuard.parked[i].teleported then try(physics, 'setAIPitStopRequest', i, false) end
+  safetyGuard.held[i], safetyGuard.parked[i] = nil, nil
 end
 
 local function guardSafetyCar(dt)
@@ -2019,34 +2069,45 @@ local function guardSafetyCar(dt)
   if sim.isOnlineRace or sim.isReplayActive then return end
   safetyGuard.timer = safetyGuard.timer + dt
   if safetyGuard.timer < 0.5 then return end
+  local step = safetyGuard.timer
   safetyGuard.timer = 0
   if not raceCars.loaded then loadRaceCars() end
   if next(raceCars.safety) == nil then return end
 
-  -- A new session, or a restarted race (back on the grid after it had started): watch the Safety Car afresh.
+  -- A new session, or a restarted race (back on the grid after it had started): watch the Safety Car afresh. A car
+  -- this app holds (no AI input) stays held, and is parked again from wherever the restart put it.
   local restart = safetyGuard.startedAt ~= nil and not sim.isSessionStarted
   if sim.currentSessionIndex ~= safetyGuard.session or restart then
-    safetyGuard.session, safetyGuard.startedAt, safetyGuard.seenInPits, safetyGuard.parked =
-      sim.currentSessionIndex, nil, {}, {}
+    safetyGuard.session, safetyGuard.startedAt, safetyGuard.seenInPits, safetyGuard.racing, safetyGuard.parked =
+      sim.currentSessionIndex, nil, {}, {}, {}
   end
   if sim.isSessionStarted and not safetyGuard.startedAt then safetyGuard.startedAt = clock() end
 
+  local state = advancedAiState()
   local race = sessionKind() == 'race'
   for i in pairs(raceCars.safety) do
     local c = ac.getCar(i)
     if c then
-      if safetyGuard.parked[i] then
-        parkSafetyCar(i, c)
+      if state == 'on' then
+        -- AdvancedAI runs it (and can send it out): hands off, and undo a park from before it was known to be on.
+        if safetyGuard.parked[i] or safetyGuard.held[i] then releaseSafetyCar(i) end
+      elseif state == 'off' then
+        parkSafetyCar(i, c, 'AdvancedAI is switched off, so it would race like any other car.')
+      elseif safetyGuard.parked[i] or safetyGuard.held[i] then
+        parkSafetyCar(i, c, 'it was racing like any other car.')
       else
+        -- AdvancedAI's state unknown: park it only once it's plainly racing.
         local inPits = field(c, 'isInPitlane') or field(c, 'isInPit')
         if inPits then safetyGuard.seenInPits[i] = true end
+        local moving = sim.isSessionStarted and not inPits and (c.speedKmh or 0) > (race and 30 or 20)
+        safetyGuard.racing[i] = moving and (safetyGuard.racing[i] or 0) + step or 0
         local loose
         if race then
-          loose = safetyGuard.startedAt ~= nil and clock() - safetyGuard.startedAt > 1.5 and not safetyGuard.seenInPits[i]
+          loose = not safetyGuard.seenInPits[i] and safetyGuard.racing[i] >= 10
         else
-          loose = sim.isSessionStarted and not inPits and (c.speedKmh or 0) > 20
+          loose = safetyGuard.racing[i] >= 3
         end
-        if loose then parkSafetyCar(i, c) end
+        if loose then parkSafetyCar(i, c, 'it was racing like any other car.') end
       end
     end
   end
