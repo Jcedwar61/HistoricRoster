@@ -73,7 +73,8 @@ public class ContentLibrary
             var name = Str(ui, "name") ?? folder;
             var brand = Str(ui, "brand");
             var tags = StrArray(ui, "tags");
-            var year = Int(ui, "year") ?? YearFromText(name) ?? YearFromText(folder);
+            // Kunos cars often have no year, but their description names the season ("the 2015 Formula One season").
+            var year = Int(ui, "year") ?? YearFromText(name) ?? YearFromText(folder) ?? YearFromText(Str(ui, "description") ?? "");
             var category = Classify(name, brand, tags, Str(ui, "class"), year, folder);
 
             var skins = new List<SkinInfo>();

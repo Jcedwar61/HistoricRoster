@@ -1240,7 +1240,9 @@ local function steerToRealResult()
     local strength = final and 2 or 1
     local base = r.e.baseLevel or 0.95
     pcall(physics.setAILevel, r.i, math.clamp(base + 0.02 * strength * err, 0.6, 1.0))
-    pcall(physics.setExtraAIGrip, r.i, math.clamp(1.2 + 0.015 * strength * err, 1.08, 1.32))
+    -- Grip only ever goes up (for cars too far back): with less grip than it expects, AC's AI brakes too late and goes
+    -- off. Cars too far forward are held back by AI level and, late on, the throttle.
+    pcall(physics.setExtraAIGrip, r.i, math.clamp(1.2 + 0.015 * strength * err, 1.2, 1.32))
     if final and err < 0 then
       pcall(physics.setAIThrottleLimit, r.i, math.clamp(0.9 + 0.06 * err, 0.55, 0.9))
     else
@@ -2252,6 +2254,22 @@ function script.update(dt)
   -- Kept fuelled instead, so it never has to. (Driving it yourself, you pit as usual.)
   if car and not userDriving() and car.isAIControlled then
     try(physics, 'setAIPitStopRequest', 0, false)
+    -- AC wears the user's engine (over-revving on the grid and on downshifts) but never an AI car's: kept as new, so
+    -- the real driver's car isn't the only one on the grid with a tired engine.
+    local life = field(car, 'engineLifeLeft')
+    if life and life < 1000 then try(physics, 'setCarEngineLife', 0, 1000) end
+    -- Stuck after a spin or a tangle: AdvancedAI recovers AI cars, but nothing recovers the user's car, and AC never
+    -- retires it. After 10 s standing still on track, it's put back on the racing line where it was.
+    if sim.isSessionStarted and not field(car, 'isInPitlane') and (car.speedKmh or 0) < 5 then
+      watch.stuck0 = (watch.stuck0 or 0) + step
+    else
+      watch.stuck0 = 0
+    end
+    if watch.stuck0 > 10 then
+      watch.stuck0 = 0
+      local ok, pos = try(ac, 'trackProgressToWorldCoordinate', ((car.splinePosition or 0) + 0.002) % 1)
+      if ok and pos and try(physics, 'setCarPosition', 0, pos, nil) then try(physics, 'setCarVelocity', 0, vec3(0, 0, 0)) end
+    end
     local fuel, maxFuel = field(car, 'fuel'), field(car, 'maxFuel')
     if fuel and maxFuel and maxFuel > 0 and fuel < maxFuel * 0.3 then try(physics, 'setCarFuel', 0, maxFuel) end
   end
