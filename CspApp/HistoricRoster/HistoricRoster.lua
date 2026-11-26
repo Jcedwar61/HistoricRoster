@@ -490,6 +490,8 @@ local watch = {
   targetHeld = 0,      -- seconds the current target has been shown
   holdFor = 15,        -- seconds to stay on the current car in 'grid' mode
   lastShown = {},      -- car index -> clock() when it was last put on screen
+  fresh = true,        -- a race session that hasn't got going yet: the camera starts on your seat
+  skip = false,        -- "Next car" pressed: move on even from a car the director would stay with
   timer = 0,
 }
 
@@ -644,6 +646,91 @@ local function onTrack(c)
   return not ac.getSim().isSessionStarted or (c.speedKmh or 0) > 15
 end
 
+-- Still racing: on track and hasn't taken the chequered flag (a car on its cool-down lap isn't in a fight).
+local function racing(c)
+  return onTrack(c) and not field(c, 'isRaceFinished')
+end
+
+-- ------------------------------------------------------------------ sessions
+-- A watched race weekend can be the race only, qualifying and the race, or practice, qualifying and the race. Each
+-- session is filmed the way TV films it: practice and qualifying follow cars on their flying laps (there are no
+-- battles, only traffic), the race starts on your seat and ends on the cars taking the chequered flag.
+
+-- 'practice', 'qualify' or 'race' (a CSP that can't tell: 'race', as before sessions were told apart).
+local function sessionKind()
+  local t = tonumber(field(ac.getSim(), 'raceSessionType'))
+  if t == 1 then return 'practice' end
+  if t == 2 then return 'qualify' end
+  if t == nil or t == 3 then return 'race' end
+  return 'practice' -- (hotlap, time attack ...: never written by the program; filmed like practice)
+end
+
+-- Race distance in laps (0 for a timed race or when it can't be told), looked up once per session.
+local sessionLaps = { index = -1, laps = 0 }
+local function raceLaps()
+  local sim = ac.getSim()
+  if sessionLaps.index ~= sim.currentSessionIndex then
+    sessionLaps.index, sessionLaps.laps = sim.currentSessionIndex, 0
+    local ok, s = try(ac, 'getSession', sim.currentSessionIndex)
+    local n = ok and s and tonumber(field(s, 'laps')) or 0
+    if n <= 0 then
+      local ok2, cfg = try(ac.INIConfig, 'raceConfig')
+      if ok2 and cfg then
+        local ok3, v = pcall(function() return cfg:get('HISTORIC_ROSTER', 'RACE_LAPS', 0) end)
+        n = ok3 and tonumber(v) or 0
+      end
+    end
+    sessionLaps.laps = n
+  end
+  return sessionLaps.laps
+end
+
+-- Each car's laps, updated twice a second: car index -> { pitLap, lastLap, pushing, doneAt, doneMs, donePush,
+-- finishedAt }. pitLap is the lap count when it was last in the pit lane, so lapCount == pitLap is an out lap.
+local lapState = {}
+local flag = { out = false } -- the chequered flag is out (the winner has finished)
+
+-- A push lap in practice or qualifying: out on track, past its out lap, and not a slow lap (more than a couple of
+-- seconds down on its best: a cool-down or in lap).
+local function pushingLap(c, l)
+  if not onTrack(c) or (c.lapCount or 0) <= l.pitLap then return false end
+  local best, perf = field(c, 'bestLapTimeMs') or 0, field(c, 'performanceMeter')
+  return best <= 0 or perf == nil or perf < 2
+end
+
+local function updateLaps()
+  local now = clock()
+  local out = false
+  for i = 0, ac.getSim().carsCount - 1 do
+    local c = ac.getCar(i)
+    if c and isRaceCar(i) then
+      local laps = c.lapCount or 0
+      local l = lapState[i]
+      -- (Fewer laps than last time: the session was restarted.)
+      if not l or laps < l.lastLap then l = { pitLap = -1, lastLap = laps } lapState[i] = l end
+      if laps > l.lastLap then
+        -- Crossed the line: the lap just completed, and whether it was a push lap.
+        l.doneAt, l.doneMs, l.donePush = now, field(c, 'previousLapTimeMs'), l.pushing
+      end
+      l.lastLap = laps
+      if field(c, 'isInPitlane') then l.pitLap = laps end
+      l.pushing = pushingLap(c, l)
+      if not l.finishedAt and field(c, 'isRaceFinished') then l.finishedAt = now end
+      if l.finishedAt then out = true end
+    end
+  end
+  flag.out = out
+end
+
+-- Lap time as 1:23.456 (tenths only: 1:23.4), nil for none.
+local function lapTimeText(ms, tenths)
+  ms = tonumber(ms)
+  if not ms or ms <= 0 then return nil end
+  local s = ms / 1000
+  if tenths then return string.format('%d:%04.1f', math.floor(s / 60), math.floor(s % 60 * 10) / 10) end
+  return string.format('%d:%06.3f', math.floor(s / 60), s % 60)
+end
+
 -- The leader, or the first car behind it that is out on track.
 local function leaderOnTrack(order)
   for _, c in ipairs(order) do if onTrack(c) then return c.index end end
@@ -697,7 +784,7 @@ local function battles(order)
   for gi, g in ipairs(groups) do
     for k = 2, #g do
       local a, b = g[k - 1], g[k]
-      if onTrack(a) and onTrack(b) then
+      if racing(a) and racing(b) then
         local gap = gapMeters(a, b)
         if gap and gap < BATTLE_M then
           -- Multi-class: the place in the class, a little lower for each slower class.
@@ -724,8 +811,8 @@ local function stillFighting(order, idx)
   for k, c in ipairs(order) do
     if c.index == idx then
       local ahead, behind = order[k - 1], order[k + 1]
-      if ahead and onTrack(ahead) and (gapMeters(ahead, c) or math.huge) < BATTLE_END_M then return true, ahead.index end
-      if behind and onTrack(behind) and (gapMeters(c, behind) or math.huge) < BATTLE_END_M then return true, behind.index end
+      if ahead and racing(ahead) and (gapMeters(ahead, c) or math.huge) < BATTLE_END_M then return true, ahead.index end
+      if behind and racing(behind) and (gapMeters(c, behind) or math.huge) < BATTLE_END_M then return true, behind.index end
       return false
     end
   end
@@ -733,46 +820,200 @@ local function stillFighting(order, idx)
 end
 
 -- Whole grid without a battle on: the car that has gone longest without being on screen (the leader now and then),
--- so over a race every car gets shown.
+-- so over a race every car gets shown. (In a multi-class race "the leader" is one of the class leaders.)
 local function gridPick(order)
   local leader = leaderOnTrack(order)
-  if math.random() < 0.25 and leader ~= watch.target then return leader end
-  local best, bestTime = nil, math.huge
-  for _, c in ipairs(order) do
-    if c.index ~= watch.target and onTrack(c) then
-      local t = watch.lastShown[c.index] or -1
-      if t < bestTime then best, bestTime = c.index, t end
+  if multiClass() then
+    local leaders = {}
+    for _, name in ipairs(classGroups()) do
+      for _, c in ipairs(classOrder(order, name)) do
+        if racing(c) then table.insert(leaders, c.index) break end
+      end
     end
+    if #leaders > 0 then leader = leaders[math.random(#leaders)] end
   end
-  return best or leader
+  if math.random() < 0.25 and leader ~= watch.target then return leader end
+  -- Cars still racing first; once the flag is out, the ones on their cool-down lap only when nobody else is left.
+  for pass = 1, 2 do
+    local best, bestTime = nil, math.huge
+    for _, c in ipairs(order) do
+      if c.index ~= watch.target and (pass == 1 and racing(c) or pass == 2 and onTrack(c)) then
+        local t = watch.lastShown[c.index] or -1
+        if t < bestTime then best, bestTime = c.index, t end
+      end
+    end
+    if best then return best end
+  end
+  return leader
 end
 
 local function setTarget(want, partner)
   watch.partner = partner
-  if want ~= nil and want ~= watch.target then
+  if want == nil then return end
+  if want ~= watch.target then
     watch.target, watch.targetHeld, watch.offTrackFor = want, 0, 0
-    watch.lastShown[want] = clock()
+    local c = ac.getCar(want)
+    watch.pickedLap = c and c.lapCount or 0 -- (the lap it was picked on: a qualifying lap is followed to its end)
     try(ac, 'focusCar', want) -- HUD and sounds follow the shown car where AC allows it
   end
+  watch.lastShown[want] = clock() -- (while it's on screen)
+end
+
+-- ---- practice and qualifying
+-- No racing, so no battles: what's worth watching is a car on a push lap. Like TV: a qualifying lap is followed to the
+-- line and its time shown before the next car; practice rotates through the cars out on track. Cars higher up the
+-- times, cars up on their best lap, and cars not on screen for a while come first. When nobody is out on track: a
+-- car moving in the pit lane (on its way out), else the pit box of the car last shown.
+
+local function lapScore(order, c, quali)
+  local place = classPosition(order, c.index) or c.racePosition or 20
+  if (field(c, 'bestLapTimeMs') or 0) <= 0 then place = math.max(place, 8) end -- no time yet
+  local score = 4 / math.max(1, place) * (quali and 1.5 or 1)
+  local seen = watch.lastShown[c.index]
+  score = score + math.min(90, seen and clock() - seen or 90) / 30
+  local perf = field(c, 'performanceMeter')
+  if perf and (field(c, 'bestLapTimeMs') or 0) > 0 and perf < -0.05 then score = score + 2 end -- up on its best
+  if (c.splinePosition or 0) > 0.8 then score = score - 1.5 end -- too little of the lap left to be worth joining
+  if c.index == watch.target then score = score - 4 end -- (its lap was just shown: someone else's turn)
+  return score + math.random() * 0.5
+end
+
+local function chooseLapTarget(order, leave, skip)
+  local quali = sessionKind() == 'qualify'
+  local cur = watch.target ~= nil and ac.getCar(watch.target) or nil
+  local l = cur and lapState[cur.index]
+  if cur and l and not leave and not skip then
+    -- Just completed a push lap: stay a few seconds for its time and place (the caption shows them).
+    if l.donePush and l.doneAt and clock() - l.doneAt < 5 then return setTarget(cur.index, nil) end
+    -- On a push lap: in qualifying all the way to the line; in practice for a while, and to the line when it's close.
+    -- (Only the lap it was picked on: after that the next car gets its turn, unless nobody else is on a push lap.)
+    if l.pushing and (cur.lapCount or 0) == watch.pickedLap then
+      local stay = quali and watch.targetHeld < 150
+        or watch.targetHeld < watch.holdFor or (cur.splinePosition or 0) > 0.75 and watch.targetHeld < 90
+      if stay then return setTarget(cur.index, nil) end
+    elseif onTrack(cur) and watch.targetHeld < MIN_HOLD then
+      return setTarget(cur.index, nil)
+    end
+  end
+
+  if watch.follow == 'leader' then
+    -- The fastest car, whenever it is out on track.
+    local fastest = order[1]
+    if fastest and onTrack(fastest) and not (skip and fastest.index == watch.target) then return setTarget(fastest.index, nil) end
+  end
+
+  local best, bestScore = nil, -math.huge
+  for _, c in ipairs(order) do
+    local cl = lapState[c.index]
+    if cl and cl.pushing and not (skip and c.index == watch.target) then
+      local score = lapScore(order, c, quali)
+      if score > bestScore then best, bestScore = c, score end
+    end
+  end
+  watch.holdFor = 25 + math.random() * 15
+  if best then
+    if best.index == watch.target then watch.pickedLap, watch.targetHeld = best.lapCount or 0, 0 end -- (its next lap)
+    return setTarget(best.index, nil)
+  end
+
+  -- Nobody on a push lap: the cars out on track (out laps, in laps), in turn.
+  if cur and not leave and not skip and onTrack(cur) and watch.targetHeld < 20 then return setTarget(cur.index, nil) end
+  local pick = gridPick(order)
+  local pc = pick ~= nil and ac.getCar(pick) or nil
+  if pc and onTrack(pc) then return setTarget(pick, nil) end
+  for _, c in ipairs(order) do
+    if onTrack(c) and not (skip and c.index == watch.target) then return setTarget(c.index, nil) end
+  end
+
+  -- Nobody out on track: a car on its way down the pit lane, else stay in the pits with the car last shown.
+  if cur and field(cur, 'isInPitlane') and (cur.speedKmh or 0) > 3 and not skip then return setTarget(cur.index, nil) end
+  for _, c in ipairs(order) do
+    if field(c, 'isInPitlane') and (c.speedKmh or 0) > 3 and c.index ~= watch.target then return setTarget(c.index, nil) end
+  end
+  if cur and isRaceCar(cur.index) then return setTarget(cur.index, nil) end
+  setTarget(order[1].index, nil)
+end
+
+-- ---- the end of the race
+-- The leader's last lap is followed to the line, the winner held for a few seconds after the flag, then the next cars
+-- to take the flag (class winners and close finishes first), each for a moment after it crosses. Returns true when
+-- it picked the car.
+local function chooseFinish(order)
+  local n = raceLaps()
+  if n <= 0 then return false end
+  local cur = watch.target ~= nil and ac.getCar(watch.target) or nil
+  if cur and field(cur, 'isRaceFinished') then
+    local l = lapState[cur.index]
+    local since = l and l.finishedAt and clock() - l.finishedAt
+    local winner = cur.racePosition == 1 or classPosition(order, cur.index) == 1
+    if since and since < (winner and 8 or 4) then
+      setTarget(cur.index, nil)
+      return true
+    end
+  end
+  if not flag.out then
+    local lead = order[1]
+    if lead and onTrack(lead) and (lead.lapCount or 0) == n - 1
+      and ((lead.splinePosition or 0) > 0.5 or watch.target == lead.index) then
+      local _, partner = stillFighting(order, lead.index)
+      setTarget(lead.index, partner)
+      return true
+    end
+    return false
+  end
+  local best, bestScore = nil, 0
+  for _, c in ipairs(order) do
+    if racing(c) and (c.splinePosition or 0) > 0.82 then
+      local place = classPosition(order, c.index) or c.racePosition or 20
+      local score = 4 / math.max(1, place) + (stillFighting(order, c.index) and 1.5 or 0) + (c.index == watch.target and 1 or 0)
+      if score > bestScore then best, bestScore = c, score end
+    end
+  end
+  if best then
+    local _, partner = stillFighting(order, best.index)
+    setTarget(best.index, partner)
+    return true
+  end
+  return false
 end
 
 local function chooseTarget(dt)
   watch.targetHeld = watch.targetHeld + dt
   local order = runningOrder()
   if #order == 0 then return end
+  updateLaps()
+  local kind, sim = sessionKind(), ac.getSim()
+  local skip = watch.skip
+  watch.skip = false
 
   -- Never stay on a car that isn't racing (pitted, retired, stopped) or on the Safety Car.
   local current = watch.target ~= nil and ac.getCar(watch.target) or nil
   if current and not onTrack(current) then watch.offTrackFor = (watch.offTrackFor or 0) + dt else watch.offTrackFor = 0 end
-  local leave = watch.target ~= nil and (not isRaceCar(watch.target) or (watch.follow ~= 'manual' and watch.offTrackFor >= 1))
+  local leave = skip or watch.target ~= nil and (not isRaceCar(watch.target) or (watch.follow ~= 'manual' and watch.offTrackFor >= 1))
 
   if watch.follow == 'manual' and watch.manualTarget and isRaceCar(watch.manualTarget) then
-    local _, partner = stillFighting(order, watch.manualTarget)
+    local partner = kind == 'race' and select(2, stillFighting(order, watch.manualTarget)) or nil
     return setTarget(watch.manualTarget, partner)
   end
 
+  if kind ~= 'race' then return chooseLapTarget(order, leave, skip) end
+
+  -- The start: on your seat (the car the camera starts on) until the field is away. (Back on the grid after the race
+  -- had started: a restart, so the start again.)
+  if watch.wasStarted and not sim.isSessionStarted then watch.fresh = true end
+  watch.wasStarted = sim.isSessionStarted
+  if watch.fresh and watch.follow ~= 'leader' and not skip and isRaceCar(0) and ac.getCar(0)
+    and (not sim.isSessionStarted or (director.raceClock or 0) < 12) then
+    local _, partner = stillFighting(order, 0)
+    return setTarget(0, partner)
+  end
+  watch.fresh = false
+
+  if not skip and chooseFinish(order) then return end
+
   local fights = battles(order)
   local best = fights[1]
+  if skip and best and (best.behind == watch.target or best.ahead == watch.target) then best = fights[2] end
 
   if watch.follow == 'leader' then
     local leader = leaderOnTrack(order)
@@ -796,7 +1037,10 @@ local function chooseTarget(dt)
   if best then return setTarget(best.behind, best.ahead) end
 
   -- No battle anywhere.
-  if watch.follow == 'battle' then return setTarget(leaderOnTrack(order), nil) end
+  if watch.follow == 'battle' then
+    local leader = leaderOnTrack(order)
+    if not (skip and leader == watch.target) then return setTarget(leader, nil) end
+  end
   if watch.target ~= nil and watch.targetHeld < watch.holdFor and not leave then return setTarget(watch.target, nil) end
   watch.holdFor = 14 + math.random() * 10
   setTarget(gridPick(order), nil)
@@ -1207,6 +1451,11 @@ local function spotFor(c, opts)
           local bonus = math.random() * 2
           if rel < 0 then bonus = bonus + 1.5 end
           if opts.high ~= nil and sp.high == opts.high then bonus = bonus + 4 end
+          if opts.line then
+            -- The finish: a camera that sees the car come up to the line and cross it.
+            local line = progressDelta(0, sp.progress) * trackLen()
+            if line >= -sp.back and line <= sp.fwd - 10 and rel < line then bonus = bonus + 6 end
+          end
           if lastDir then
             if sp.side == opts.last.side then bonus = bonus + 2 end
             if point:clone():sub(sp.pos):normalize():dot(lastDir) > 0.9 then bonus = bonus - 4 end
@@ -1226,19 +1475,64 @@ end
 
 -- ---- choosing shots
 
+-- The filmed car is about to take the chequered flag (or just has): the cameras at the line.
+local function finishing(c)
+  if sessionKind() ~= 'race' or raceLaps() <= 0 then return false end
+  if field(c, 'isRaceFinished') then
+    local l = lapState[c.index]
+    return l ~= nil and l.finishedAt ~= nil and clock() - l.finishedAt < 6
+  end
+  return (flag.out or (c.lapCount or 0) >= raceLaps() - 1) and (c.splinePosition or 0) > 0.8 and onTrack(c)
+end
+
+-- A pit lane camera: on the lane ahead of the car (a car in its pit box faces down the lane), at head height, on the
+-- same level as the car (not on the pit building's roof) and with a clear view of it. Nil when there's no such place.
+local function pitCameraPos(c)
+  local moving = (c.speedKmh or 0) > 8
+  local fwd = moving and vec3(c.velocity.x, 0, c.velocity.z) or vec3(c.look.x, 0, c.look.z)
+  if fwd:length() < 0.01 then return nil end
+  fwd:normalize()
+  local side = fwd:cross(UP, vec3()):normalize()
+  local point = carPoint(c)
+  local first = math.random() < 0.5 and 1 or -1
+  local places = moving and { { 45, 9 }, { 32, 8 }, { 60, 10 } } or { { 9, 4 }, { 7, 5 }, { 12, 6 } }
+  for _, place in ipairs(places) do
+    for _, sign in ipairs({ first, -first }) do
+      local pos = c.position:clone():addScaled(fwd, place[1]):addScaled(side, sign * place[2])
+      local ground = groundAt(pos)
+      if ground and math.abs(ground - c.position.y) < 2.5 then
+        pos.y = ground + 1.8
+        if clearView(pos, point) then return pos end
+      end
+    end
+  end
+  return nil
+end
+
 -- Kind of the next shot. Like on TV: mostly trackside cameras; after an onboard, helicopter or chase shot always
--- back to them; at the start wide, high shots of the field.
+-- back to them; at the start of the race wide, high shots of the field; at the finish the cameras at the line; in
+-- the pit lane a pit lane camera. Practice and qualifying have more onboards (a qualifying lap from the cockpit).
 local function pickKind(c, p)
+  local pits = field(c, 'isInPitlane')
   if director.style ~= 'auto' then
+    if pits and director.style == 'tv' then return 'pit' end
     return (director.style == 'onboard' and director.noOnboard) and 'chase' or director.style
   end
-  local sim = ac.getSim()
-  if not sim.isSessionStarted or (director.raceClock or 0) < 25 then return 'tv' end
+  if pits then return 'pit' end
+  if director.finish then return 'tv' end
+  local sim, race = ac.getSim(), sessionKind() == 'race'
+  if race and (not sim.isSessionStarted or (director.raceClock or 0) < 25) then return 'tv' end
   if director.lastKind ~= 'tv' or (director.tvRun or 0) < 2 then return 'tv' end
   local behind = p and p.position:clone():sub(c.position):dot(c.look) < -3
     and p.position:distance(c.position) < 30
   local r = math.random()
   if director.noOnboard then return r < 0.75 and 'tv' or r < 0.9 and 'heli' or 'chase' end
+  if not race then
+    if r < 0.55 then return 'tv' end
+    if r < 0.8 then return 'onboard' end
+    if r < 0.92 then return 'heli' end
+    return 'chase'
+  end
   if behind and r < 0.3 then return 'onboard' end
   if r < (p and 0.5 or 0.62) then return 'tv' end
   if r < (p and 0.75 or 0.78) then return 'onboard' end
@@ -1250,11 +1544,22 @@ local function newShot(c, p)
   local sim, s = ac.getSim(), shape()
   local kind = pickKind(c, p)
   local shot = { kind = kind, age = 0, blocked = 0 }
+  if kind == 'pit' then
+    local pos = pitCameraPos(c)
+    if pos then
+      shot.pos, shot.length = pos, (c.speedKmh or 0) > 8 and 14 or 8 + math.random() * 4
+      director.pos:set(pos)
+      return shot
+    end
+    -- (No place for a camera in this part of the pit lane: a chase shot down the lane, or from the air.)
+    kind = (c.speedKmh or 0) > 8 and 'chase' or 'heli'
+    shot.kind, shot.fallback = kind, true
+  end
   if kind == 'tv' then
-    local start = not sim.isSessionStarted or (director.raceClock or 0) < 25
-    local high = (start or (s.oval and math.random() < 0.7)) and true or nil
+    local start = sessionKind() == 'race' and (not sim.isSessionStarted or (director.raceClock or 0) < 25)
+    local high = not director.finish and (start or (s.oval and math.random() < 0.7)) and true or nil
     local last = director.shot
-    local spot = spotFor(c, { high = high, last = last and last.spot })
+    local spot = spotFor(c, { high = high, last = last and last.spot, line = director.finish })
     if not spot and last and last.spot and not last.lost and director.lastTarget == c.index
       and spotCovers(last.spot, c, 25) and smoothSeconds(last.spot.pos, c, 2) >= 2 then
       -- No other camera has the car, and this one still does: carry on (cutting to the same camera is a jump cut).
@@ -1268,7 +1573,7 @@ local function newShot(c, p)
     end
     -- No trackside camera sees the car here (or they're still being placed): from the air, where nothing is in the way.
     kind = 'heli'
-    shot.kind = kind
+    shot.kind, shot.fallback = kind, true
   end
   if kind == 'onboard' then
     shot.rear = p ~= nil and p.position:clone():sub(c.position):dot(c.look) < -3
@@ -1305,6 +1610,16 @@ local function shotOver(c)
   end
   -- Something in the way for longer than a passing pole or tree, or the car can't be held in the picture: cut.
   if s.blocked > 0.35 or s.lost then return true end
+  -- The finish: from an onboard, helicopter or chase shot, cut to the cameras at the line.
+  if director.finish and director.style == 'auto' and s.kind ~= 'tv' and s.kind ~= 'pit' and not s.fallback
+    and s.age > 0.5 then return true end
+  if s.kind == 'pit' then
+    if not field(c, 'isInPitlane') and s.age > 1.5 then return true end -- out on track: the trackside cameras
+    if s.age > 1 and panRate(s.pos, director.track, director.vel) > MAX_PAN * 1.1 then return true end
+    local away = c.position:clone():sub(s.pos)
+    if (c.speedKmh or 0) > 8 and away:dot(director.vel) > 0 and away:length() > 25 then return true end -- gone by
+    return s.age > s.length
+  end
   if s.kind == 'tv' then
     -- The car is about to pass so close that following it would be a whip pan: the next camera.
     -- (Cut a moment before it comes to that, as a director watching the car come would.)
@@ -1405,6 +1720,7 @@ local function updateDirector(dt)
     if not onTrack(p) or p.position:distance(c.position) > range then p = nil end
   end
   director.partnerShown = p and p.index or nil
+  director.finish = finishing(c)
 
   -- Every new shot is a cut: the camera jumps there instead of panning across the track.
   local snap = false
@@ -1482,6 +1798,8 @@ local function updateDirector(dt)
     -- Where the camera is.
     if s.kind == 'tv' then
       director.pos:set(s.spot.pos)
+    elseif s.kind == 'pit' then
+      director.pos:set(s.pos)
     elseif s.kind == 'chase' then
       -- (Moving up to the car ahead, it rises over the one it passes on the way.)
       local lift = director.panFor > 0 and 2.5 * math.sin(math.pi * (1 - director.panFor / director.panTotal)) or 0
@@ -1541,7 +1859,7 @@ local function updateDirector(dt)
     local dist = math.max(director.pos:distance(tracked), 1)
     if snap and s.kind ~= 'chase' then
       -- (A cut: start from the new shot's framing, not the last one's.)
-      director.fov = math.clamp(math.deg(2 * math.atan((s.kind == 'heli' and 12 or (s.spot.high and 14 or 4)) / dist)), 3, 45)
+      director.fov = math.clamp(math.deg(2 * math.atan((s.kind == 'heli' and 12 or s.kind == 'pit' and 4 or (s.spot.high and 14 or 4)) / dist)), 3, 45)
     end
     local halfH = dist * math.tan(math.rad(director.fov) / 2)
     local toCar = tracked:clone():sub(director.pos):scale(1 / dist)
@@ -1589,7 +1907,7 @@ local function updateDirector(dt)
     if s.kind == 'chase' then
       wantFov = 52 + 6 * rival
     else
-      local frameH = s.kind == 'heli' and 24 or (s.spot.high and 28 or 8)
+      local frameH = s.kind == 'heli' and 24 or s.kind == 'pit' and 6 or (s.spot.high and 28 or 8)
       wantFov = math.clamp(math.deg(2 * math.atan((frameH / 2 + 2 * rival) / dist)), 3, 45)
       for _, pt in ipairs(pack) do wantFov = math.max(wantFov, math.min(needFov(pt), 40)) end
     end
@@ -1681,7 +1999,11 @@ function script.update(dt)
   if sim.currentSessionIndex ~= watch.session then
     watch.session = sim.currentSessionIndex
     watch.engaged, watch.userOff = false, false
-    director.shot = nil
+    -- Each session is filmed afresh: laps, the flag, who has been shown; a race starts on your seat again.
+    watch.fresh, watch.lastShown, watch.targetHeld = true, {}, 99
+    for k in pairs(lapState) do lapState[k] = nil end
+    flag.out = false
+    director.shot, director.raceClock, director.finish = nil, 0, false
     ideal.tries = 0 -- AC ignores the ideal-line command until a session runs: try again in each one
     -- A restart: un-park retired cars and start the real result over.
     for i, e in pairs(real.cars) do
@@ -1729,6 +2051,64 @@ function script.update(dt)
   end
 end
 
+-- Where the session is: "Race, lap 12 / 50", "Qualifying, 8:31 left" ... (sep: between the session and the rest)
+local function sessionLine(order, sep)
+  local sim, kind = ac.getSim(), sessionKind()
+  if kind == 'race' then
+    local n, lead = raceLaps(), order[1]
+    if flag.out then return 'Race' .. sep .. 'Chequered flag' end
+    if not sim.isSessionStarted then return n > 0 and string.format('Race%s%d laps', sep, n) or 'Race' end
+    if n > 0 and lead then
+      local lap = math.min(n, (lead.lapCount or 0) + 1)
+      return lap == n and 'Race' .. sep .. 'Final lap' or string.format('Race%sLap %d / %d', sep, lap, n)
+    end
+    return 'Race'
+  end
+  local name = kind == 'qualify' and 'Qualifying' or 'Practice'
+  local left = tonumber(field(sim, 'sessionTimeLeft'))
+  if not sim.isSessionStarted or not left then return name end
+  if left > 0 then
+    return string.format('%s%s%d:%02d left', name, sep, math.floor(left / 60000), math.floor(left / 1000) % 60)
+  end
+  return name .. sep .. 'Chequered flag'
+end
+
+-- What the filmed car is doing, for the caption: its lap in practice and qualifying, its finish in the race. Text and
+-- colour, or nil.
+local function carStatus(order, c)
+  local l = lapState[c.index]
+  local gold, white, grey = rgbm(1, 0.82, 0.35, 1), rgbm(1, 1, 1, 0.85), rgbm(1, 1, 1, 0.6)
+  local pits = field(c, 'isInPitlane')
+  if sessionKind() == 'race' then
+    if field(c, 'isRaceFinished') and l and l.finishedAt and clock() - l.finishedAt < 10 then
+      local cp, _, cname = classPosition(order, c.index)
+      if c.racePosition == 1 then return 'Wins the race', gold end
+      if cp == 1 then return 'Wins ' .. cname, gold end
+      return cp and string.format('Finishes %s P%d', cname, cp) or string.format('Finishes P%d', c.racePosition or 0), gold
+    end
+    if pits then return 'In the pit lane', grey end
+    return nil
+  end
+  if pits then return (c.speedKmh or 0) > 3 and 'In the pit lane' or 'In the pits', grey end
+  -- (The lap just completed: a few seconds of its time and the place it's worth.)
+  local prev, best = tonumber(field(c, 'previousLapTimeMs')) or 0, tonumber(field(c, 'bestLapTimeMs')) or 0
+  if l and l.donePush and l.doneAt and clock() - l.doneAt < 6 and prev > 0 then
+    local text = 'Lap ' .. lapTimeText(prev)
+    if prev == best then text = text .. ((c.racePosition == 1) and '   fastest' or '   personal best') end
+    return text .. string.format('   P%d', c.racePosition or 0), gold
+  end
+  if l and l.pushing then
+    local text = 'Flying lap   ' .. (lapTimeText(field(c, 'lapTimeMs'), true) or '')
+    local perf = tonumber(field(c, 'performanceMeter'))
+    if perf and perf ~= 0 and best > 0 then -- (0: this CSP keeps no delta for the car)
+      return text .. string.format('   %+.2f', perf), perf < 0 and rgbm(0.45, 1, 0.5, 1) or white
+    end
+    return text, white
+  end
+  if onTrack(c) then return (l and (c.lapCount or 0) <= l.pitLap) and 'Out lap' or 'Slow lap', grey end
+  return nil
+end
+
 local function tabWatch()
   local sim = ac.getSim()
   local car = ac.getCar(0)
@@ -1764,14 +2144,20 @@ local function tabWatch()
   end
   ui.separator()
 
+  ui.textColored(sessionLine(runningOrder(), ', '), colors.head)
   ui.text('Follow:')
   ui.sameLine()
   if ui.radioButton('Whole grid', watch.follow == 'grid') then watch.follow, watch.targetHeld = 'grid', 99 end
-  if ui.itemHovered() then ui.setTooltip('Rotates through every car on the grid: battles, the leader, and whoever has gone longest without being shown.') end
+  if ui.itemHovered() then
+    ui.setTooltip('Race: rotates through every car on the grid: battles, the leader, and whoever has gone longest without being shown.\n' ..
+      'Practice and qualifying: the cars on flying laps, each followed to the line.')
+  end
   ui.sameLine()
   if ui.radioButton('Leader', watch.follow == 'leader') then watch.follow = 'leader' end
+  if ui.itemHovered() then ui.setTooltip('Race: the leader. Practice and qualifying: the fastest car, while it is out on track.') end
   ui.sameLine()
   if ui.radioButton('Closest battle', watch.follow == 'battle') then watch.follow, watch.targetHeld = 'battle', 99 end
+  if ui.itemHovered() then ui.setTooltip('Race only (practice and qualifying have no battles: the flying laps are shown).') end
   ui.sameLine()
   if ui.radioButton('Pick a car', watch.follow == 'manual') then watch.follow = 'manual' watch.manualTarget = watch.manualTarget or watch.target end
 
@@ -1791,7 +2177,7 @@ local function tabWatch()
     ui.sameLine()
     if ui.button('Next shot') then director.shot = nil end
     ui.sameLine()
-    if ui.button('Next car') then watch.follow, watch.targetHeld = 'grid', 99 end
+    if ui.button('Next car') then watch.follow, watch.targetHeld, watch.skip = 'grid', 99, true end
     if hasSpline() then
       ui.textDisabled(spots.built and (#spots.list .. ' trackside cameras placed round the track')
         or ('Placing trackside cameras... (' .. #spots.list .. ' so far)'))
@@ -1804,10 +2190,14 @@ local function tabWatch()
   -- Running order: click a driver to watch them.
   ui.childWindow('watchOrder', vec2(ui.availableSpaceX(), ui.availableSpaceY()), false, function()
     local order = runningOrder()
+    local times = sessionKind() ~= 'race'
     for _, c in ipairs(order) do
       local cp, _, cname = classPosition(order, c.index)
-      local label = cp and string.format('P%-3d %s P%d  %s##w%d', c.racePosition or 0, cname, cp, ac.getDriverName(c.index) or '?', c.index)
-        or string.format('P%-3d %s##w%d', c.racePosition or 0, ac.getDriverName(c.index) or '?', c.index)
+      -- (Practice and qualifying: each car's best lap.)
+      local best = times and (lapTimeText(field(c, 'bestLapTimeMs')) or 'no time') or nil
+      local name = (ac.getDriverName(c.index) or '?') .. (best and ('   ' .. best) or '')
+      local label = cp and string.format('P%-3d %s P%d  %s##w%d', c.racePosition or 0, cname, cp, name, c.index)
+        or string.format('P%-3d %s##w%d', c.racePosition or 0, name, c.index)
       if ui.selectable(label, watch.target == c.index) then
         watch.follow, watch.manualTarget = 'manual', c.index
       end
@@ -1862,7 +2252,6 @@ function script.watchOverlay()
     return
   end
   local size = ac.getUI().windowSize
-  local x, y = 24, size.y - 96
   local lines = {}
   local c = watch.target ~= nil and ac.getCar(watch.target) or nil
   if c and director.enabled and not userDriving() then
@@ -1870,21 +2259,25 @@ function script.watchOverlay()
     if not okNumber then number = nil end
     local order = runningOrder()
     local cp, _, cname = classPosition(order, c.index)
+    table.insert(lines, { sessionLine(order, '   ·   '), 14, rgbm(1, 1, 1, 0.6) })
     table.insert(lines, { string.format('P%d  %s%s%s', c.racePosition or 0, (tonumber(number) or 0) > 0 and ('#' .. tostring(number) .. '  ') or '',
       ac.getDriverName(c.index) or '?', cp and string.format('   ·   %s P%d', cname, cp) or ''), 22, rgbm(1, 1, 1, 1) })
     table.insert(lines, { ac.getCarName(c.index) or '', 15, rgbm(1, 1, 1, 0.75) })
     local p = watch.partner ~= nil and ac.getCar(watch.partner) or nil
-    if p then
+    if p and ac.getSim().isSessionStarted then -- (side by side on the grid isn't a battle yet)
       local front = math.min(c.racePosition or 99, p.racePosition or 99)
       local pp = classPosition(order, p.index)
       local place = cp and pp and string.format('%s P%d', cname, math.min(cp, pp)) or ('P' .. front)
       table.insert(lines, { string.format('Battle for %s with %s', place, ac.getDriverName(p.index) or '?'), 15, rgbm(1, 0.82, 0.35, 1) })
     end
+    local status, color = carStatus(order, c)
+    if status then table.insert(lines, { status, 15, color }) end
   end
   if director.error then table.insert(lines, { 'Director camera: ' .. director.error, 14, rgbm(1, 0.5, 0.45, 1) }) end
   if #lines == 0 then return end
   local height = 0
   for _, l in ipairs(lines) do height = height + l[2] + 6 end
+  local x, y = 24, size.y - 26 - height -- (bottom left, growing upwards with the lines)
   ui.drawRectFilled(vec2(x - 12, y - 8), vec2(x + 520, y + height + 2), rgbm(0, 0, 0, 0.55), 4)
   for _, l in ipairs(lines) do
     drawText(l[1], l[2], vec2(x, y), l[3])

@@ -471,7 +471,8 @@ you picked, on the TV cameras. It needs Custom Shaders Patch: the Historic Roste
 when the race loads. Open the app from the apps sidebar for its **Watch** tab:
 
 - follow the **whole grid** (the default), the leader, the closest battle, or a car you pick from
-  the running order. **Next car** cuts to another car straight away. In whole-grid and battle mode,
+  the running order. **Next car** cuts to another car straight away (even in the middle of a
+  battle or a qualifying lap). In whole-grid and battle mode,
   **a battle on track always comes first**: as soon as a car is within about 30 m of the car ahead,
   the camera goes there and frames both cars, and stays while the fight lasts (until the gap grows
   past about 55 m). A train of cars nose to tail counts as one battle, filmed at its front. With no
@@ -494,6 +495,25 @@ when the race loads. Open the app from the apps sidebar for its **Watch** tab:
   own TV cameras can only follow your seat's car during a
   live race, which is why the app brings its own. It only ever runs in a watch-only race;
   untick it to get AC's cameras back;
+- **every session is filmed the way TV films it.** A watched weekend can be the race only,
+  qualifying and the race, or practice, qualifying and the race:
+  - **practice and qualifying** have no battles, so the director follows the cars on **flying
+    laps**: a qualifying lap is followed all the way to the line and its time and place shown
+    before the next car gets its turn; practice rotates through the cars out on track. Cars higher
+    up the times, cars currently up on their best lap and cars not seen for a while come first, with
+    more onboard laps than in the race. When nobody is out on track, the camera goes to a car
+    leaving the pits (pit lane cameras), else stays with a car in its pit box. **Leader** follows
+    the fastest car while it is out on track; **Closest battle** works like whole grid here;
+  - **the race** starts on your seat, with wide shots of the grid and the field getting away. On
+    the **last lap** the camera stays with the leader and films it **crossing the line** from the
+    cameras at the finish, holds on the winner, then shows the next cars taking the chequered flag,
+    class winners and close finishes first. Cars on their cool-down lap are never treated as a
+    battle;
+  - the caption adds where the session is (*Race · Lap 12 / 50*, *Final lap*, *Qualifying ·
+    8:31 left*, *Chequered flag*) and what the car is doing: *Flying lap 0:45.2 −0.21* (green when
+    it's up on its best lap), *Lap 1:32.456 personal best P3*, *Out lap*, *In the pits*, *Wins the
+    race*, *Finishes GT1 P2*. In practice and qualifying the Watch tab's running order shows each
+    car's best lap;
 - the ideal racing line is switched off automatically while you watch, and back to how you had
   it if you take over the car;
 - **Drive yourself** takes over the car (AC's own autopilot key, C, does the same), and **Let AI
