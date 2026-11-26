@@ -213,7 +213,7 @@ public static class TrackMatcher
         else if (categories.Contains("NASCAR"))
             b += Regex.IsMatch(l, @"road|roval|course|\bgp\b|\bf1\b") ? -3 : Regex.IsMatch(l, @"oval|nascar|speedway|brickyard") ? 3 : 0;
         if (categories.Contains("F1")) b += Regex.IsMatch(l, @"\bgp\b|grand ?prix|\bf1\b|\bfull\b") ? 3 : 0;
-        if (categories.Any(c => c is "LMP1" or "Hypercar" or "GT1" or "GT3"))
+        if (categories.Any(c => c is "LMP1" or "Hypercar" or "GT1" or "GT3" or "GTE" or "Group C" or "GT4" or "Sportscar"))
             b += Regex.IsMatch(l, @"endurance|24 ?h|\bwec\b|\bfull\b|\bgp\b") ? 3 : 0;
         if (Regex.IsMatch(l, @"drift|drag|rally|kart|reverse|\bpit\b|parking|touge|national|club|short|sprint|demo")) b -= 4;
         if (Regex.IsMatch(l, @"(19|20)\d\d")) b -= 1; // season-specific variants: the plain layout first

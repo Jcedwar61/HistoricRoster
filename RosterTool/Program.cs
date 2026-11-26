@@ -27,6 +27,8 @@ try
         "champ" => Champ(),
         "install-app" => InstallApp(),
         "wiki" => await Wiki(),
+        "wiki-season" => await WikiSeason(),
+        "imsa" => await Imsa(),
         "ai" => await AiCommands.Run(cli, Ws, FindRoster),
         _ => Help(),
     };
@@ -70,7 +72,8 @@ int Help()
 
           find                                 Show the Assetto Corsa install and installed content
           build-db  [--from 1950] [--to 2026]  Build historic_rosters_db.json with real grids:
-                    [--series f1,nascar,endurance,nascar-classic]   (default: all)
+                    [--series f1,nascar,endurance,nascar-classic,imsa,wec,imsa-classic,indycar,cart,dtm,supercars]
+                                                    (default: all)
                     [--nascar-series 1,2,3] [--refresh] [--server <AssettoServer folder> | --rosters <folder>]
                     [--no-ai]                       skip the AI step (real F1 chassis names, OpenAI + DeepSeek)
           scan                                 Match installed cars to real cars; rosters from your liveries
@@ -94,6 +97,9 @@ int Help()
           install-archive <file.zip|.7z|.rar>  Install car/track folders from an archive into Assetto Corsa
           install-app                          Install the "Historic Roster" CSP app (apps sidebar in game)
           wiki <article title>                 Check how a Wikipedia race article is read
+          wiki-season <series> <year> [--import n]  Race articles of a season article (series: wec, imsa-classic,
+                                               indycar, cart, dtm, supercars); --import reads the first n
+          imsa <year> [--mpc] [--import n]     IMSA races in IMSA's timing archive (--mpc: Michelin Pilot Challenge)
         """ + AiCommands.HelpText + """
 
         Common: --content "<assettocorsa>\content" (found through Steam when omitted)
@@ -129,7 +135,7 @@ async Task<int> BuildDb()
     {
         From = cli.GetInt("from") ?? 1950,
         To = cli.GetInt("to") ?? DateTime.UtcNow.Year,
-        Series = (cli.Get("series") ?? "f1,nascar,endurance,nascar-classic").Split(',', StringSplitOptions.TrimEntries),
+        Series = cli.Get("series")?.Split(',', StringSplitOptions.TrimEntries) ?? DbBuildOptions.AllSeries,
         NascarSeries = (cli.Get("nascar-series") ?? "1").Split(',').Select(int.Parse).ToArray(),
         Refresh = cli.Has("refresh"),
         Ai = cli.Has("no-ai") ? null : HistoricRosterPlugin.Ai.AiSettings.LoadFromProgram(),
@@ -352,6 +358,53 @@ async Task<int> Wiki()
     var entries = WikipediaImporter.ParseResults(html, null);
     Console.WriteLine($"Parsed {entries.Count} entries");
     foreach (var e in entries.Take(5)) Console.WriteLine($"  {e.Position} [{e.Class}] #{e.Number} {e.Driver} | {e.Team} | {e.Car} | {e.Laps}");
+    return 0;
+}
+
+async Task<int> WikiSeason()
+{
+    var series = WikiSeasonImporter.Series.FirstOrDefault(s => s.Key == cli.Positional.FirstOrDefault())
+                 ?? throw new InvalidOperationException("Usage: RosterTool wiki-season <" + string.Join("|", WikiSeasonImporter.Series.Select(s => s.Key)) + "> <year>");
+    var year = int.Parse(cli.Positional.ElementAtOrDefault(1) ?? throw new InvalidOperationException("Give a year."));
+    var importer = new WikiSeasonImporter();
+    if (await importer.SeasonAsync(series, year) is not { } season) { Console.WriteLine("No season article found."); return 1; }
+    var links = WikiSeasonImporter.RaceLinks(season.Html, year, season.Title.Contains('\u2013'));
+    Console.WriteLine($"{season.Title}: {links.Count} linked articles that may be races");
+    foreach (var title in links.Take(cli.GetInt("import") ?? 0))
+    {
+        var day = await importer.ImportRaceAsync(series, title);
+        if (day.Count == 0) Console.WriteLine($"  -  {title}: not a race of this championship / no results");
+        foreach (var r in day)
+        {
+        Console.WriteLine(r == null ? ""
+            : $"  OK {r.Name}  [{r.Category}, {r.Series}]  {r.Date}  track \"{r.Track?.Name}\" ({r.Track?.Locality})  {r.Entries.Count} cars, " +
+              $"{r.Entries.Count(e => e.GridPosition != null)} grid, classes {string.Join(",", r.Entries.Select(e => e.Class).Distinct())}");
+        foreach (var e in r.Entries.OrderBy(e => e.Position ?? 999).Take(2)) Console.WriteLine($"       P{e.Position} G{e.GridPosition} [{e.Class}] #{e.Number} {e.Driver} | {e.Team} | {e.Car} | {e.Laps}");
+        }
+        await Task.Delay(300);
+    }
+    foreach (var title in links.Skip(cli.GetInt("import") ?? 0)) Console.WriteLine("  " + title);
+    return 0;
+}
+
+async Task<int> Imsa()
+{
+    var year = int.Parse(cli.Positional.FirstOrDefault() ?? throw new InvalidOperationException("Usage: RosterTool imsa <year>"));
+    var importer = new ImsaImporter();
+    var races = await importer.ListSeasonAsync(year, cli.Has("mpc") ? ImsaImporter.PilotChallenge : ImsaImporter.WeatherTech);
+    Console.WriteLine($"{races.Count} races");
+    var n = cli.GetInt("import") ?? 0;
+    foreach (var race in races)
+    {
+        Console.WriteLine($"  {race.LocalStart:yyyy-MM-dd HH:mm}  {race.Event} / {race.Session}");
+        if (n-- <= 0) continue;
+        var r = await importer.ImportAsync(race);
+        if (r == null) { Console.WriteLine("     (no results)"); continue; }
+        Console.WriteLine($"     {r.Id}: {r.Name} [{r.Category}] track \"{r.Track?.Name}\" {r.Entries.Count} cars, {r.Entries.Count(e => e.GridPosition != null)} grid, " +
+                          $"classes {string.Join(",", RaceClasses.Ordered(r.Entries))}");
+        foreach (var e in r.Entries.OrderBy(e => e.GridPosition ?? 999).Take(3).Concat(r.Entries.Where(e => e.Position == null).Take(2)))
+            Console.WriteLine($"       P{e.Position} G{e.GridPosition} [{e.Class}] #{e.Number} {e.Driver} | {e.Team} | {e.Car} | {e.Laps} | {e.Status}");
+    }
     return 0;
 }
 

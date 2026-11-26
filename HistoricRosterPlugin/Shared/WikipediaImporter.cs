@@ -31,13 +31,13 @@ public class WikipediaImporter
     /// <summary>Races covered by "RosterTool build-db". Missing articles for a year are skipped.</summary>
     public static readonly IReadOnlyList<WikiEvent> Events = new WikiEvent[]
     {
-        new("le-mans", "{year} 24 Hours of Le Mans", 1996, 2026, y => y >= 2021 ? "Hypercar" : "LMP1",
+        new("le-mans", "{year} 24 Hours of Le Mans", 1923, 2026, y => SportsCars(y, 2021),
             "24 Hours of Le Mans", "Circuit de la Sarthe", "le mans") { Position = (47.950, 0.224), UsualStart = _ => "16:00", RaceDay = DayOfWeek.Saturday },
-        new("sebring", "{year} 12 Hours of Sebring", 1996, 2026, y => y >= 2021 ? "Hypercar" : "LMP1",
+        new("sebring", "{year} 12 Hours of Sebring", 1952, 2026, y => SportsCars(y, 2021),
             "12 Hours of Sebring", "Sebring International Raceway", "sebring") { Position = (27.454, -81.348), UsualStart = _ => "10:30", RaceDay = DayOfWeek.Saturday },
-        new("petit-le-mans", "{year} Petit Le Mans", 1998, 2026, y => y >= 2021 ? "Hypercar" : "LMP1",
+        new("petit-le-mans", "{year} Petit Le Mans", 1998, 2026, y => SportsCars(y, 2021),
             "Petit Le Mans", "Michelin Raceway Road Atlanta", "road atlanta") { Position = (34.146, -83.815), UsualStart = _ => "12:00", RaceDay = DayOfWeek.Saturday },
-        new("daytona-24", "{year} 24 Hours of Daytona", 1996, 2026, y => y >= 2023 ? "Hypercar" : "LMP1",
+        new("daytona-24", "{year} 24 Hours of Daytona", 1966, 2026, y => SportsCars(y, 2023),
             "24 Hours of Daytona", "Daytona International Speedway road course", "daytona road course") { Position = (29.185, -81.071), UsualStart = _ => "14:30", RaceDay = DayOfWeek.Saturday },
         new("spa-24", "{year} Spa 24 Hours", 1996, 2026, y => y <= 2010 ? "GT1" : "GT3",
             "Spa 24 Hours", "Circuit de Spa-Francorchamps", "spa-francorchamps", new[] { "24 Hours of Spa", "Spa 24 Hours" }) { Position = (50.437, 5.971), UsualStart = _ => "16:30", RaceDay = DayOfWeek.Saturday },
@@ -62,6 +62,14 @@ public class WikipediaImporter
         new("talladega-fall", "{year} YellaWood 500", 2015, 2026, _ => "NASCAR",
             "NASCAR Cup Series", "Talladega Superspeedway", "talladega") { Position = (33.567, -86.066), UsualStart = _ => "14:00" },
     };
+
+    /// <summary>
+    /// The category of a sports-car race by era: Hypercar (from <paramref name="hypercarFrom"/>), LMP1 (prototypes from
+    /// 1994: WSC, LMP900, LMP1, DPi), Group C (1982-1993, with IMSA GTP), else Sportscar (earlier sports cars).
+    /// </summary>
+    public static string SportsCars(int year, int hypercarFrom)
+        => year >= hypercarFrom ? "Hypercar" : year >= 1994 ? "LMP1" : year >= 1982 ? "Group C" : "Sportscar";
+
     public async Task<Roster?> ImportAsync(WikiEvent ev, int year, CancellationToken ct = default)
     {
         var nascarYear = ev.Category(year) == "NASCAR" ? year : (int?)null;
@@ -258,6 +266,14 @@ public class WikipediaImporter
 
     /// <summary>Finds the classification table(s) in an article and turns them into roster entries.</summary>
     public static List<RosterEntry> ParseResults(string html, int? nascarYear)
+        => ParseRaces(html, nascarYear).SelectMany(r => r).ToList();
+
+    /// <summary>
+    /// The classification table(s) per race: an article about a weekend with two races (DTM, Supercars, IndyCar
+    /// double-headers) has a table per race, each with its own winner. Tables without a winner (retirements) belong to
+    /// the race before them.
+    /// </summary>
+    public static List<List<RosterEntry>> ParseRaces(string html, int? nascarYear)
     {
         html = Regex.Replace(html, "<style[^>]*>.*?</style>", "", RegexOptions.Singleline);
         html = Regex.Replace(html, "<sup[^>]*class=\"reference\"[^>]*>.*?</sup>", "", RegexOptions.Singleline);
@@ -272,7 +288,7 @@ public class WikipediaImporter
             : tables.Where(t => Col(t, "driver") >= 0 && Col(t, "no", "#", "car no") >= 0)
                 .OrderByDescending(t => t.Rows.Count).Take(1).ToList();
 
-        var entries = new List<RosterEntry>();
+        var races = new List<List<RosterEntry>>();
         var seen = new HashSet<string>();
         foreach (var t in chosen)
         {
@@ -281,6 +297,14 @@ public class WikipediaImporter
                 car = Col(t, "chassis", "car", "vehicle", "make", "manufacturer"), laps = Col(t, "laps"),
                 status = Col(t, "time/retired", "reason", "status", "time", "retired");
 
+            // A table with its own winner while the race so far has one is the next race.
+            var hasWinner = pos >= 0 && t.Rows.Any(r => pos < r.Count && r[pos] == "1");
+            if (races.Count == 0 || (hasWinner && races[^1].Any(e => e.Position == 1)))
+            {
+                races.Add(new List<RosterEntry>());
+                seen.Clear();
+            }
+            var entries = races[^1];
             foreach (var row in t.Rows)
             {
                 string Get(int i) => i >= 0 && i < row.Count ? row[i] : "";
@@ -307,7 +331,7 @@ public class WikipediaImporter
                 });
             }
         }
-        return entries;
+        return races.Where(r => r.Count > 0).ToList();
     }
 
     /// <summary>Diagnostics: header and row count of each wikitable (RosterTool wiki "title").</summary>
@@ -316,6 +340,14 @@ public class WikipediaImporter
         html = Regex.Replace(html, "<style[^>]*>.*?</style>", "", RegexOptions.Singleline);
         foreach (var t in ExtractTables(html).Select(ParseTable))
             yield return t == null ? "(no header row)" : $"rows={t.Rows.Count} [{string.Join(" | ", t.Headers)}]";
+    }
+
+    /// <summary>The article's title (after redirects) and HTML; null when it doesn't exist.</summary>
+    public static async Task<(string Title, string Html)?> FetchPageAsync(string title, CancellationToken ct = default)
+    {
+        using var doc = await ImportHttp.GetJsonAsync($"{Api}?action=parse&page={Uri.EscapeDataString(title)}&prop=text&format=json&formatversion=2&redirects=1", ct);
+        if (!doc.RootElement.TryGetProperty("parse", out var p)) return null;
+        return (p.Str("title") ?? title, p.GetProperty("text").GetString() ?? "");
     }
 
     public static async Task<string?> FetchHtmlAsync(string title, CancellationToken ct = default)

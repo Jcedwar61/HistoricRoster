@@ -1,6 +1,7 @@
 # Historic Roster: User Guide
 
-Recreate real races from 1996 to today in Assetto Corsa: F1, GT1, LMP1, GT3 and NASCAR.
+Recreate real races in Assetto Corsa: F1, NASCAR, IMSA, WEC and Le Mans, IndyCar and CART, DTM,
+Supercars and the classic endurance races.
 Real grids, real cars, real tracks.
 
 **Download:** get `HistoricRosterSetup.exe` from the
@@ -314,11 +315,23 @@ RosterTool build-db --server "D:\AssettoServer"
 | F1, every race | Jolpica F1 API | 1996 to today |
 | NASCAR Cup, every race | NASCAR's results feed | 2017 to today (add `--nascar-series 1,2,3` for Xfinity and Trucks) |
 | NASCAR crown jewels | Wikipedia race articles | 1996 to 2016: Daytona 500, Coca-Cola 600, Brickyard 400, Southern 500 |
-| Endurance: LMP1, GT1, GT3 classes | Wikipedia race articles | Le Mans, Sebring, Petit Le Mans, Daytona 24, Spa 24, Bathurst 12 Hour, Nürburgring 24 |
+| IMSA WeatherTech SportsCar Championship, every race, all classes | IMSA's official timing archive | 2016 to today: official results; the grid is the qualifying order class by class |
+| IMSA Michelin Pilot Challenge (GS / TCR) | IMSA's official timing archive | 2016 to today |
+| IMSA before 2016: ALMS, United SportsCar, IMSA GT | Wikipedia race articles | the rounds that have an article (mostly ALMS 1999 to 2013) |
+| FIA World Endurance Championship | Wikipedia race articles | 2012 to today, every round with an article |
+| IndyCar (IRL) and CART / Champ Car | Wikipedia race articles | IndyCar 1996 to today, CART 1979 to 2007, with the Indianapolis 500 |
+| DTM | Wikipedia race articles | the rounds that have an article (2000 to today); both races of a weekend |
+| Supercars | Wikipedia race articles | the events whose article has the results (mostly the endurance races) |
+| Endurance: Le Mans, Sebring, Daytona 24, Petit Le Mans, Spa 24, Bathurst 12 Hour, Nürburgring 24 | Wikipedia race articles | Le Mans from 1923, Sebring from 1952, Daytona from 1966 (from 2016 Daytona, Sebring and Petit Le Mans come from IMSA's archive) |
 
-Useful options: `--from 2004 --to 2009` for a few seasons, `--series f1` for one series, and
-`--refresh` to download again. A full build takes several minutes because it waits politely
-between requests. Running it again only fetches what's new.
+Useful options: `--from 2004 --to 2009` for a few seasons, `--series f1` for one series (keys:
+`f1`, `nascar`, `nascar-classic`, `endurance`, `imsa`, `wec`, `imsa-classic`, `indycar`, `cart`,
+`dtm`, `supercars`), and `--refresh` to download again. A full build takes an hour or more the
+first time because it waits politely between requests. Running it again only fetches what's new.
+
+Multi-class races (IMSA, WEC, Le Mans) keep every car's real class (GTP, DPi, LMP2, GTLM, GTD ...),
+and stand-ins are picked by class: a GTD car gets a GT3 stand-in, a DPi a prototype. In the
+program's series list, IMSA and WEC races are also under **IMSA** and **WEC**.
 
 Without `--server`, the file goes in RosterTool's own `rosters` folder.
 
@@ -695,6 +708,8 @@ For F1 and NASCAR, admins can also import single races in game: `/roster_f1 2004
 | `race <id>` | Offline race against AI |
 | `install-app` | Install the in-game app, this guide and RosterTool |
 | `wiki <article title>` | Check how a Wikipedia race article is read |
+| `wiki-season <series> <year>` | The race articles of a season (`wec`, `imsa-classic`, `indycar`, `cart`, `dtm`, `supercars`); `--import 5` reads the first five |
+| `imsa <year>` | The IMSA races in IMSA's timing archive (`--mpc` for Michelin Pilot Challenge, `--import 3` reads the first three) |
 
 Common options: `--content "<assettocorsa>\content"` (normally found automatically),
 `--server "<AssettoServer folder>"` or `--rosters "<folder>"`.
@@ -709,8 +724,14 @@ Common options: `--content "<assettocorsa>\content"` (normally found automatical
 - **Online slots are for players.** AC servers have no AI racing opponents; use `race` for AI.
 - **Data coverage:**
   - F1 is complete from 1950 (the database update downloads every season).
-  - Supercars: the Bathurst 1000 from 1996, from Wikipedia.
+  - Supercars: the Bathurst 1000 from 1996 and the other events whose Wikipedia article has the
+    results.
   - NASCAR is complete from 2017, with crown jewels before that.
+  - IMSA is complete from 2016 (official results). IMSA's starting grids are published only as
+    PDFs, so the grid is the qualifying order, class by class.
+  - WEC, IndyCar, CART, DTM and the older IMSA series come from the races' Wikipedia articles:
+    a race without an article, or whose article has no results table, isn't in the database.
+    BTCC, Super GT and Grand-Am have no race articles to read.
   - Endurance races come from Wikipedia and depend on each article. A few years are missing or
     are entry lists only, and those are marked in the race notes.
 - **NASCAR's feed is unofficial** and could change. You can switch it off in the plugin config

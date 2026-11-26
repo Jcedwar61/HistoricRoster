@@ -127,7 +127,7 @@ public partial class MainWindow
         SetStatus("Asking the AI what to search for ...");
         try
         {
-            var categories = _races.Select(r => r.Category).Where(c => c != "").Distinct().Order().ToList();
+            var categories = RaceSeries.Choices(_races.Select(r => r.Roster));
             var r = await ai.SearchAsync(q, categories);
             _updatingUi = true;
             SearchBox.Text = string.Join(" ", r.Words);

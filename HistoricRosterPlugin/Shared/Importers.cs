@@ -38,6 +38,29 @@ internal static class ImportHttp
         }
     }
 
+    /// <summary>A text page (HTML listing, CSV); null when it doesn't exist (404). UTF-8, else Latin-1.</summary>
+    public static async Task<string?> GetTextAsync(string url, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            using var response = await Client.GetAsync(url, ct);
+            if ((int)response.StatusCode == 429 && attempt <= 5)
+            {
+                var wait = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(5 * attempt);
+                if (wait > TimeSpan.FromMinutes(2)) wait = TimeSpan.FromMinutes(2);
+                await Task.Delay(wait, ct);
+                continue;
+            }
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException($"{url} returned HTTP {(int)response.StatusCode}");
+            var bytes = await response.Content.ReadAsByteArrayAsync(ct);
+            var text = System.Text.Encoding.UTF8.GetString(bytes);
+            if (text.Contains('\uFFFD')) text = System.Text.Encoding.Latin1.GetString(bytes);
+            return text.TrimStart('\uFEFF');
+        }
+    }
+
     public static string? Str(this JsonElement e, string name)
         => e.TryGetProperty(name, out var p) ? p.ValueKind switch
         {

@@ -223,7 +223,8 @@ public partial class MainWindow : Window
             .ToList();
 
         _updatingUi = true;
-        SeriesBox.ItemsSource = new[] { "All series" }.Concat(_races.Select(r => r.Category).Where(c => c != "").Distinct().Order()).ToList();
+        // Categories (F1, NASCAR, GT3 ...) and series groups (IMSA, WEC, DTM) whose races are filed under several classes.
+        SeriesBox.ItemsSource = new[] { "All series" }.Concat(RaceSeries.Choices(_races.Select(r => r.Roster))).ToList();
         SeriesBox.SelectedIndex = 0;
         YearBox.ItemsSource = new[] { "All years" }.Concat(_races.Select(r => r.Year).Where(y => y > 0).Distinct().OrderDescending().Select(y => y.ToString())).ToList();
         YearBox.SelectedIndex = 0;
@@ -324,7 +325,7 @@ public partial class MainWindow : Window
 
     private bool Matches(RaceItem r)
     {
-        if (SeriesBox.SelectedIndex > 0 && r.Category != (string)SeriesBox.SelectedItem) return false;
+        if (SeriesBox.SelectedIndex > 0 && !RaceSeries.Is(r.Roster, (string)SeriesBox.SelectedItem)) return false;
         if (YearBox.SelectedIndex > 0 && r.Year.ToString() != (string)YearBox.SelectedItem) return false;
         if (_aiYearFrom is { } from && r.Year < from) return false;
         if (_aiYearTo is { } to && r.Year > to) return false;
