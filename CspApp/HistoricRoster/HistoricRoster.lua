@@ -1160,8 +1160,13 @@ local function retireCar(i, e, c)
   local late = clock() - e.pitSince > 120
   local inPit = field(c, 'isInPit')
   if inPit or late then
-    if late and not inPit and has(ac, 'SpawnSet') then try(physics, 'teleportCarTo', i, ac.SpawnSet.Pits) end
-    try(physics, 'setAINoInput', i, true, true)
+    -- Put in its pit box directly (never teleportCarTo: AC's pit spawn routine leaves pit crews round the cars on track).
+    if late and not inPit then
+      local t = field(c, 'pitTransform')
+      local pos = t and field(t, 'position')
+      if pos then try(physics, 'setCarPosition', i, pos, field(t, 'look')) end
+    end
+    try(physics, 'setAINoInput', i, true)
     e.retired = true
   end
 end
@@ -2038,29 +2043,43 @@ local function advancedAiState()
   return value
 end
 
+-- Parks it: held where it stands at once (no AI input, so it never pulls away), then, once the session has been
+-- running 5 s and the field has left it behind, put straight into its pit box (physics.setCarPosition to the car's
+-- pit position). Never with physics.teleportCarTo: that runs AC's own "spawn in the pits" routine, and run during a
+-- session it leaves the pit crews standing round the cars out on track. A CSP without setCarPosition or the pit
+-- position lets it drive into the pits instead, and holds it there.
 local function parkSafetyCar(i, c, why)
   local p = safetyGuard.parked[i]
   if not p then
     p = { since = clock() }
     safetyGuard.parked[i] = p
-    -- Straight to its pit box; a CSP that can't teleport sends it into the pits instead.
-    p.teleported = has(ac, 'SpawnSet') and (try(physics, 'teleportCarTo', i, ac.SpawnSet.Pits))
-    if not p.teleported then try(physics, 'setAIPitStopRequest', i, true) end
     if not safetyGuard.noted then
       safetyGuard.noted = true
       try(ac, 'setMessage', 'Historic Roster', 'Safety Car kept in its pit box: ' .. why)
     end
   end
-  -- Held there (parked AI: no input) once it's in the pits, or after two minutes wherever it is.
-  if p.teleported or field(c, 'isInPit') or clock() - p.since > 120 then
-    if try(physics, 'setAINoInput', i, true, true) then safetyGuard.held[i] = true end
+  local inPits = field(c, 'isInPitlane') or field(c, 'isInPit')
+  if not p.moved and not p.driving and not inPits and safetyGuard.startedAt and clock() - safetyGuard.startedAt > 5 then
+    local t = field(c, 'pitTransform')
+    local pos = t and field(t, 'position')
+    if pos and try(physics, 'setCarPosition', i, pos, field(t, 'look')) then
+      p.moved = true
+      if vec3 then try(physics, 'setCarVelocity', i, vec3(0, 0, 0)) end
+    else
+      p.driving = true
+      if try(physics, 'setAINoInput', i, false) then safetyGuard.held[i] = nil end
+      try(physics, 'setAIPitStopRequest', i, true)
+    end
   end
+  -- Driving to the pits: held once it's in its pit box. Otherwise held from the first moment.
+  if p.driving and not field(c, 'isInPit') then return end
+  if try(physics, 'setAINoInput', i, true) then safetyGuard.held[i] = true end
 end
 
 -- AdvancedAI is running the Safety Car: hand it back exactly as AdvancedAI expects it.
 local function releaseSafetyCar(i)
   if safetyGuard.held[i] then try(physics, 'setAINoInput', i, false) end
-  if safetyGuard.parked[i] and not safetyGuard.parked[i].teleported then try(physics, 'setAIPitStopRequest', i, false) end
+  if safetyGuard.parked[i] and safetyGuard.parked[i].driving then try(physics, 'setAIPitStopRequest', i, false) end
   safetyGuard.held[i], safetyGuard.parked[i] = nil, nil
 end
 
@@ -2292,8 +2311,12 @@ local function tabWatch()
     elseif real.enabled then
       ui.textDisabled(real.outOfPlace == 0 and 'every car is in its real place' or (real.outOfPlace .. ' car(s) still out of their real place'))
     end
-    if real.enabled and io.dirExists(ac.getFolder(ac.FolderID.Root) .. '/apps/lua/AdvancedIA') then
-      ui.textColored('AdvancedIA is installed: if it is active it also changes AI pace and can stop the real result. Turn it off for watched races.', colors.head)
+    -- AdvancedAI drives the AI cars in place of Kunos's stock AI; the real result is steered on top of it.
+    local aia = advancedAiState()
+    if aia == 'on' then
+      ui.textDisabled('AdvancedAI is driving the AI cars; "Finish as in real life" steers their pace on top of it.')
+    elseif aia == 'off' then
+      ui.textColored('AdvancedAI is switched off in its own window: Kunos\'s stock AI is driving the cars.', colors.head)
     end
   end
   ui.separator()

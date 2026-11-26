@@ -534,8 +534,9 @@ out of place lose their collisions so they can get past cleanly, and cars too fa
 back. Cars that really retired go into the pits at the same point of the race (scaled to your
 race length) and park there, and AC's own random AI retirements are switched off. The Watch tab
 shows how many cars are still out of their real place, and **Finish as in real life** turns it
-off. If AdvancedIA is active it also changes AI pace and can spoil the real result, so turn it
-off for watched races.
+off. Keep AdvancedAI switched on (in its own window): it drives the AI cars in place of Kunos's
+stock AI, and the real result is steered on top of it. The Watch tab says when AdvancedAI is
+switched off and the stock AI is driving.
 
 **Multi-class races.** Endurance races with several classes on one grid (LMP1, LMP2, GTE Pro, GT3,
 prototypes ...) are handled class by class:
