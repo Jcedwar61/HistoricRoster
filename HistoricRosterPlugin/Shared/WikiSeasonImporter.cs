@@ -36,7 +36,8 @@ public class WikiSeasonImporter
         new("cart", new[] { "{year} CART season", "{year} Champ Car season", "{year} CART PPG World Series", "{year} CART FedEx Championship Series", "{year} Champ Car World Series", "{year} IndyCar season" }, 1979, 2007,
             _ => "IndyCar", y => y >= 2004 ? "Champ Car World Series" : "CART",
             new[] { "CART", "Champ Car", "Indy Car", "IndyCar", "PPG" })
-            { DefaultCar = y => y is >= 2007 ? "Panoz DP01" : null },
+            // Spec chassis: Lola B02/00 in Champ Car 2004-2006, the Panoz DP01 in 2007.
+            { DefaultCar = y => y >= 2007 ? "Panoz DP01" : y >= 2004 ? "Lola B02/00" : null },
         new("dtm", new[] { "{year} Deutsche Tourenwagen Masters", "{year} DTM season", "{year} Deutsche Tourenwagen Meisterschaft" }, 1984, 2026,
             // GT3 cars since 2021.
             y => y >= 2021 ? "GT3" : "DTM", _ => "DTM", new[] { "DTM", "Deutsche Tourenwagen" }),
@@ -167,6 +168,21 @@ public class WikiSeasonImporter
             Notes = races.Count > 1 ? $"Race {i + 1} of {races.Count} of the weekend." : null,
             Entries = entries,
         }).ToList();
+    }
+
+    /// <summary>
+    /// Gives entries without a car the chassis the season's "Teams and drivers" table lists for the driver (CART-era
+    /// race tables name only the team). True when any entry got one.
+    /// </summary>
+    public static bool FillCars(Roster roster, Dictionary<string, string> seasonCars)
+    {
+        var any = false;
+        foreach (var e in roster.Entries.Where(e => e.Car == null))
+        {
+            var first = e.Driver.Split('/')[0].Trim();
+            if (seasonCars.TryGetValue(TextFold.Fold(first), out var car)) { e.Car = car; any = true; }
+        }
+        return any;
     }
 
     /// <summary>The article's info box (up to its own end, nested tables included).</summary>

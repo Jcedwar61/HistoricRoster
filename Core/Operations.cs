@@ -185,7 +185,10 @@ public static class DatabaseBuilder
             {
                 ct.ThrowIfCancellationRequested();
                 var seasonKey = $"season:{series.Key}-{y}";
-                if (!o.Refresh && skip.Contains(seasonKey)) continue;
+                var carsKey = $"cars:{series.Key}-{y}";
+                // This season's races whose tables name no car: the season's entry list gives each driver's chassis.
+                var carless = db.Rosters.Where(r => r.Year == y && r.Id.StartsWith(series.Key + "-") && r.Entries.Any(e => e.Car == null)).ToList();
+                if (!o.Refresh && skip.Contains(seasonKey) && (carless.Count == 0 || skip.Contains(carsKey))) continue;
                 (string Title, string Html)? season;
                 try { season = await seasons.SeasonAsync(series, y, ct); }
                 catch (OperationCanceledException) { throw; }
@@ -195,12 +198,16 @@ public static class DatabaseBuilder
                     if (y < DateTime.Now.Year) skip.Add(seasonKey);
                     continue;
                 }
+                var seasonCars = WikipediaImporter.EntryCars(s.Html);
+                foreach (var r in carless) WikiSeasonImporter.FillCars(r, seasonCars);
+                skip.Add(carsKey);
                 var complete = true;
                 foreach (var title in WikiSeasonImporter.RaceLinks(s.Html, y, s.Title.Contains('–')))
                 {
                     ct.ThrowIfCancellationRequested();
                     // Races already in the database (Le Mans, Bathurst, the Indy 500 of another season article ...).
                     if (wikiSources.Contains(title) || (!o.Refresh && skip.Contains("wiki:" + title))) continue;
+                    if (skip.Contains(seasonKey)) continue; // only the entry list was needed this time
                     try
                     {
                         var raceDay = await seasons.ImportRaceAsync(series, title, ct);
@@ -211,7 +218,11 @@ public static class DatabaseBuilder
                         }
                         else if (!wikiSources.Contains(WikiTitle(raceDay[0].Source) ?? ""))
                         {
-                            foreach (var r in raceDay) Add(r);
+                            foreach (var r in raceDay)
+                            {
+                                WikiSeasonImporter.FillCars(r, seasonCars);
+                                Add(r);
+                            }
                             wikiSources.Add(WikiTitle(raceDay[0].Source)!);
                             got += raceDay.Count;
                         }

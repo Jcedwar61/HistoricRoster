@@ -334,6 +334,32 @@ public class WikipediaImporter
         return races.Where(r => r.Count > 0).ToList();
     }
 
+    /// <summary>
+    /// Each driver's chassis from a season article's "Teams and drivers" table (Team / Chassis / Engine / Drivers), for
+    /// race tables that don't name the car. Keyed by the folded driver name.
+    /// </summary>
+    public static Dictionary<string, string> EntryCars(string seasonHtml)
+    {
+        seasonHtml = Regex.Replace(seasonHtml, "<style[^>]*>.*?</style>", "", RegexOptions.Singleline);
+        seasonHtml = Regex.Replace(seasonHtml, "<sup[^>]*class=\"reference\"[^>]*>.*?</sup>", "", RegexOptions.Singleline);
+        var cars = new Dictionary<string, string>();
+        foreach (var t in ExtractTables(seasonHtml).Select(ParseTable).Where(t => t != null).Cast<Table>())
+        {
+            int drivers = Col(t, "driver", "drivers", "driver(s)"), chassis = Col(t, "chassis", "car");
+            if (drivers < 0 || chassis < 0 || Col(t, "pos", "position") >= 0) continue;
+            foreach (var row in t.Rows)
+            {
+                if (drivers >= row.Count || chassis >= row.Count || row[chassis].Length == 0) continue;
+                foreach (var d in row[drivers].Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var name = Regex.Replace(d, @"(\s+(R|W|RY|\(R\)|\(W\))|\s*[*†‡])+$", "").Trim();
+                    if (name.Length > 2) cars.TryAdd(TextFold.Fold(name), row[chassis]);
+                }
+            }
+        }
+        return cars;
+    }
+
     /// <summary>Diagnostics: header and row count of each wikitable (RosterTool wiki "title").</summary>
     public static IEnumerable<string> DescribeTables(string html)
     {

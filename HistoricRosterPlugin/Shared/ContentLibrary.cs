@@ -178,6 +178,9 @@ public class ContentLibrary
             "GTS" when year is >= 1999 and <= 2004 => "GT1",
             "GS" or "GT4" => "GT4",
             "TCR" or "ST" or "TCA" => "TCR",
+            // IMSA GTO / GTU / GTX and the other GT classes before 1999: production-based cars, no prototype stand-ins.
+            "GTO" or "GTU" or "GTX" or "AAGT" or "AGT" or "IMSAGTO" or "IMSAGTU" or "IMSAGTX" or "GROUPB" or "GRB" or "GROUP5" or "GR5" => "Classic GT",
+            "GT" or "GTS" when year is < 1999 => "Classic GT",
             _ => null,
         };
     }
