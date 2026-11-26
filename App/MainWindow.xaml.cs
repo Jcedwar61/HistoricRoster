@@ -861,6 +861,8 @@ public partial class MainWindow : Window
             {
                 if (InGameApp.EnsureCurrent(_ws.AcRoot, BundledInGameApp) is { } done)
                     Log($"Historic Roster in-game app {done} in {InGameApp.InstalledFolder(_ws.AcRoot)} (it drives your car in a watched race).");
+                // AdvancedIA drives the AI and applies the rules; in a watched race the real result decides who retires.
+                if (AdvancedIaPatch.Apply(_ws.AcRoot) is { } patched) Log(patched);
             }
             catch (Exception ex)
             {

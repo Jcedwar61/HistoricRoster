@@ -2041,11 +2041,17 @@ local function advancedAiState()
     f:seek('set', math.max(0, size - 32768))
     local text = f:read('*a') or ''
     f:close()
-    local stamp, state
+    local stamp, state, tabs
     for line in text:gmatch('[^\r\n]+') do
       if line:sub(1, 3) == '===' then
-        stamp, state = nil, nil -- a new launch: only its own summaries count
+        stamp, state, tabs = nil, nil, nil -- a new launch: only its own summaries count
       else
+        -- The sections switched on this session ("onglets: general,blue,... ; ...").
+        local list = line:match('onglets: ([%a,]+)') or line:match('tabs: ([%a,]+)')
+        if list then
+          tabs = {}
+          for t in list:gmatch('%a+') do tabs[t] = true end
+        end
         local s = line:match('[%s,|]garde (%a+)') or line:match('[%s,|]guard (%a+)')
         local y, mo, d, h, mi, se = line:match('^(%d+)%-(%d+)%-(%d+) (%d+):(%d+):(%d+)')
         if s and y then
@@ -2058,9 +2064,19 @@ local function advancedAiState()
     if state and stamp and math.abs(os.time() - stamp) <= 150 then
       value = aiaOff[state] and 'off' or aiaOn[state] and 'on' or nil
     end
+    aiaState.tabs = tabs
   end)
   aiaState.value = value
   return value
+end
+
+-- AdvancedAI runs the Safety Car only when it's on with its Accidents section (where the Safety Car lives). Set up
+-- to drive the cars only, it leaves the Safety Car alone, so this app has to keep it in its pit box. 'on', 'off' or
+-- nil (can't be told).
+local function advancedAiSafetyCar()
+  local state = advancedAiState()
+  if state == 'on' and aiaState.tabs and not aiaState.tabs.accidents then return 'off' end
+  return state
 end
 
 -- Parks it: held where it stands at once (no AI input, so it never pulls away), then, once the session has been
@@ -2122,7 +2138,7 @@ local function guardSafetyCar(dt)
   end
   if sim.isSessionStarted and not safetyGuard.startedAt then safetyGuard.startedAt = clock() end
 
-  local state = advancedAiState()
+  local state = advancedAiSafetyCar()
   local race = sessionKind() == 'race'
   for i in pairs(raceCars.safety) do
     local c = ac.getCar(i)
@@ -2131,7 +2147,7 @@ local function guardSafetyCar(dt)
         -- AdvancedAI runs it (and can send it out): hands off, and undo a park from before it was known to be on.
         if safetyGuard.parked[i] or safetyGuard.held[i] then releaseSafetyCar(i) end
       elseif state == 'off' then
-        parkSafetyCar(i, c, 'AdvancedAI is switched off, so it would race like any other car.')
+        parkSafetyCar(i, c, 'AdvancedAI isn\'t running it, so it would race like any other car.')
       elseif safetyGuard.parked[i] or safetyGuard.held[i] then
         parkSafetyCar(i, c, 'it was racing like any other car.')
       else

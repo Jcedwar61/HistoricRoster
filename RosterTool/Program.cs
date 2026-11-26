@@ -226,6 +226,8 @@ int Race()
         if (!apps.CanWatch)
             throw new InvalidOperationException("Watching an AI race needs Custom Shaders Patch and the Historic Roster in-game app (RosterTool install-app).");
         setup.Watch = true;
+        // AdvancedIA drives the AI and applies the rules; in a watched race the real result decides who retires.
+        if (AdvancedIaPatch.Apply(ws.AcRoot) is { } patched) Console.WriteLine(patched);
     }
     if (cli.GetInt("laps") is { } laps) setup.Laps = laps;
     if (cli.GetInt("ai-level") is { } ai) setup.AiLevel = ai;
