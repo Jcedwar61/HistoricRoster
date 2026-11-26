@@ -304,6 +304,9 @@ public partial class MainWindow : Window
         if (_apps == null) return;
         // A TextBlock, not a string: WPF would treat "_" in "ferrari_458_s3" as a keyboard-shortcut marker.
         SafetyCarBox.Content = new TextBlock { Text = $"Add AdvancedAI Safety Car ({_apps.SafetyCarModel}) at the back of the grid" };
+        SafetyCarBox.ToolTip = "Optional. Untick for a race without a Safety Car (AdvancedAI then neutralises with a VSC/FCY).\n" +
+                               "AdvancedAI keeps the Safety Car in its pit box until it's needed; if AdvancedAI isn't running it,\n" +
+                               "the Historic Roster in-game app parks it there, so it never races.";
         SafetyCarBox.IsEnabled = _apps.SafetyCarInstalled;
         if (!_apps.SafetyCarInstalled) SafetyCarBox.IsChecked = false;
         SafetyCarBox.Visibility = _apps.AdvancedIA ? Visibility.Visible : Visibility.Collapsed;
@@ -816,7 +819,9 @@ public partial class MainWindow : Window
 
     private void SafetyCar_Changed(object sender, RoutedEventArgs e)
     {
-        if (_updatingUi || _content == null) return;
+        if (_updatingUi) return;
+        SaveSettings(); // (kept straight away: a Safety Car is a choice made once, not per race)
+        if (_content == null) return;
         BuildSetup();
     }
 

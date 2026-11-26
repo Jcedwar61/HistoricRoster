@@ -10,7 +10,7 @@
         <AssemblyName>HistoricRoster</AssemblyName>
         <ApplicationIcon>app.ico</ApplicationIcon>
         <Product>Historic Roster</Product>
-        <Version>1.11.0</Version>
+        <Version>1.11.1</Version>
     </PropertyGroup>
 
     <ItemGroup>

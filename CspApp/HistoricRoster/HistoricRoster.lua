@@ -1962,7 +1962,76 @@ local function updateDirector(dt)
   cam.fov = director.fov
 end
 
+-- ------------------------------------------------------------------ the Safety Car never races
+-- The program can put AdvancedAI's Safety Car at the back of the grid. AdvancedAI parks it in its pit box as soon
+-- as a session loads, and only sends it out to neutralise the race. When AdvancedAI isn't running it (switched off
+-- in its own settings, or it never got hold of the car), Assetto Corsa races it like any other AI car. So, in every
+-- offline session, driven or watched:
+--  * race: a Safety Car that still hasn't been in the pit lane a second or two after the start (nothing took it off
+--    the grid) is sent to its pit box and parked there for the rest of the race;
+--  * practice and qualifying: a Safety Car that drives out onto the track is parked the same way.
+-- A Safety Car AdvancedAI has parked is left to AdvancedAI, so it can still come out for a neutralisation.
+local safetyGuard = { timer = 0, session = -1, startedAt = nil, seenInPits = {}, parked = {}, noted = false }
+
+local function parkSafetyCar(i, c)
+  local p = safetyGuard.parked[i]
+  if not p then
+    p = { since = clock() }
+    safetyGuard.parked[i] = p
+    -- Straight to its pit box; a CSP that can't teleport sends it into the pits instead.
+    p.teleported = has(ac, 'SpawnSet') and (try(physics, 'teleportCarTo', i, ac.SpawnSet.Pits))
+    if not p.teleported then try(physics, 'setAIPitStopRequest', i, true) end
+    if not safetyGuard.noted then
+      safetyGuard.noted = true
+      try(ac, 'setMessage', 'Historic Roster', 'Safety Car kept in its pit box: AdvancedAI isn\'t running it, so it would race like any other car.')
+    end
+  end
+  -- Held there (parked AI: no input) once it's in the pits, or after two minutes wherever it is.
+  if p.teleported or field(c, 'isInPit') or clock() - p.since > 120 then try(physics, 'setAINoInput', i, true, true) end
+end
+
+local function guardSafetyCar(dt)
+  local sim = ac.getSim()
+  if sim.isOnlineRace or sim.isReplayActive then return end
+  safetyGuard.timer = safetyGuard.timer + dt
+  if safetyGuard.timer < 0.5 then return end
+  safetyGuard.timer = 0
+  if not raceCars.loaded then loadRaceCars() end
+  if next(raceCars.safety) == nil then return end
+
+  -- A new session, or a restarted race (back on the grid after it had started): watch the Safety Car afresh.
+  local restart = safetyGuard.startedAt ~= nil and not sim.isSessionStarted
+  if sim.currentSessionIndex ~= safetyGuard.session or restart then
+    safetyGuard.session, safetyGuard.startedAt, safetyGuard.seenInPits, safetyGuard.parked =
+      sim.currentSessionIndex, nil, {}, {}
+  end
+  if sim.isSessionStarted and not safetyGuard.startedAt then safetyGuard.startedAt = clock() end
+
+  local race = sessionKind() == 'race'
+  for i in pairs(raceCars.safety) do
+    local c = ac.getCar(i)
+    if c then
+      if safetyGuard.parked[i] then
+        parkSafetyCar(i, c)
+      else
+        local inPits = field(c, 'isInPitlane') or field(c, 'isInPit')
+        if inPits then safetyGuard.seenInPits[i] = true end
+        local loose
+        if race then
+          loose = safetyGuard.startedAt ~= nil and clock() - safetyGuard.startedAt > 1.5 and not safetyGuard.seenInPits[i]
+        else
+          loose = sim.isSessionStarted and not inPits and (c.speedKmh or 0) > 20
+        end
+        if loose then parkSafetyCar(i, c) end
+      end
+    end
+  end
+end
+
 function script.update(dt)
+  -- Every offline session, watched or not.
+  pcall(guardSafetyCar, dt)
+
   if not watch.checked then
     watch.checked = true
     -- Watch-only races only: never in online races, never without the flag the program writes.

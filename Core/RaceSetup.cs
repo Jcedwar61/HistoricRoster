@@ -412,6 +412,11 @@ public static class RaceIniWriter
         var raceCars = setup.Grid.Where(s => !s.IsSafetyCar).ToList();
         string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
 
+        // The Safety Car, in every race: the in-game app keeps it in the pits when AdvancedAI isn't running it (AC
+        // would race it like any other AI car) and never films it.
+        var safetyIndex = cars.FindIndex(s => s.IsSafetyCar);
+        if (safetyIndex >= 0) ini.Set(WatchSection, "SAFETY_CAR", safetyIndex.ToString(CultureInfo.InvariantCulture));
+
         if (setup.Watch)
         {
             // The real result, so the in-game app can steer the AI to it: per car (by race.ini CAR_n index) its real
@@ -421,8 +426,7 @@ public static class RaceIniWriter
             ini.Set(WatchSection, "RACE_LAPS", setup.Laps.ToString(CultureInfo.InvariantCulture));
             for (var i = 0; i < cars.Count; i++)
             {
-                // The in-game app never points the watch camera at the Safety Car.
-                if (cars[i].IsSafetyCar) { ini.Set(WatchSection, "SAFETY_CAR", i.ToString(CultureInfo.InvariantCulture)); continue; }
+                if (cars[i].IsSafetyCar) continue;
                 var e = cars[i].Car.Entry;
                 ini.Set(WatchSection, $"CAR_{i}_POS", (e.Position ?? 0).ToString(CultureInfo.InvariantCulture));
                 ini.Set(WatchSection, $"CAR_{i}_LAPS", (e.Laps ?? 0).ToString(CultureInfo.InvariantCulture));
