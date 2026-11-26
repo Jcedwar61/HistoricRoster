@@ -4,7 +4,8 @@ namespace HistoricRosterPlugin;
 /// A small patch to the AdvancedIA CSP app (MIT, by Vincent Chevalier) so it works with a watched race. AdvancedIA drives
 /// the AI cars and applies the racing rules and AI penalties as usual; only in a watched Historic Roster race
 /// ([HISTORIC_ROSTER] WATCH=1 in race.ini, for the race that's loaded) it:
-/// - never retires or disqualifies a car: cars finish or retire as they did in real life, which the in-game app steers;
+/// - never retires or disqualifies a car: cars finish or retire as they did in real life, which the in-game app steers,
+///   and never sends a stuck car to its pit box (the in-game app puts it back on track, out of shot);
 /// - never penalises the user's car (CAR_0): the autopilot drives it in place of the real driver, can't serve a
 ///   penalty (a drive-through would need AC's pit menu) and would be disqualified for it;
 /// - shows no on-screen panel, flags or messages for the user's car: a watched race has no driver.
@@ -56,6 +57,11 @@ public static class AdvancedIaPatch
                           "elseif a.player and a.valid and p.sanPlayerTrackLimits and not HR.watched() and not a.finished and not c.dq then"),
         ("src/engine.lua", "if K.recoverRetire and e.profile=='C' and cmd.recover",
                        "if K.recoverRetire and not HR.watched() and e.profile=='C' and cmd.recover"),
+        // A stuck car isn't sent to its pit box (a lap lost): the in-game app puts it back on track, out of shot.
+        ("src/engine.lua", "cmd.recover=not a.pit and (red and still>=K.redRecoverTime",
+                           "cmd.recover=not HR.watched() and not a.pit and (red and still>=K.redRecoverTime"),
+        ("src/engine.lua", "if wedged and not a.pit then cmd.recover=true end",
+                           "if wedged and not a.pit and not HR.watched() then cmd.recover=true end"),
         // A watched race has no driver: no on-screen panel, flags or messages for the user's car.
         ("AdvancedIA.lua", "function script.HUMANAI__HUD()\r\n if released then return end",
                            "function script.HUMANAI__HUD()\r\n if released or HR.watched() then return end"),
@@ -63,6 +69,11 @@ public static class AdvancedIaPatch
                             "function M.message(title,text) if HR.watched() then return false end if callable(ac.setMessage)"),
         ("src/applier.lua", "if name=='flag' then return pcall(f,value) end",
                             "if name=='flag' then if HR.watched() then return true end return pcall(f,value) end"),
+        // ... and no DRS or delta beeps for it.
+        ("src/applier.lua", " if frame.online or frame.replay or frame.paused or not ac.AudioEvent or not callable(ac.dirname) then return end",
+                            " if HR.watched() or frame.online or frame.replay or frame.paused or not ac.AudioEvent or not callable(ac.dirname) then return end"),
+        ("src/applier.lua", " if frame.online or frame.replay or frame.paused or a.deltaFailed or not ac.AudioEvent or not callable(ac.dirname) then return end",
+                            " if HR.watched() or frame.online or frame.replay or frame.paused or a.deltaFailed or not ac.AudioEvent or not callable(ac.dirname) then return end"),
     };
 
     public static string Folder(string acRoot) => Path.Combine(acRoot, "apps", "lua", "AdvancedIA");
@@ -109,7 +120,7 @@ public static class AdvancedIaPatch
             if (!File.Exists(path + ".hr-orig")) File.Copy(path, path + ".hr-orig");
             File.WriteAllText(path, text);
         }
-        return "AdvancedIA patched for watched races (no retirements, disqualifications, penalties or on-screen alerts for your car there).";
+        return "AdvancedIA patched for watched races (no retirements, disqualifications, penalties, alerts or beeps for your car there).";
     }
 
     // The edits are written with CRLF where they span lines; a file with LF line endings gets LF.

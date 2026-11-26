@@ -1160,6 +1160,48 @@ local function lapsRun(c, e)
   return (c.lapCount or 0) + (e.crossed and s or 0)
 end
 
+-- A car stuck on track after a spin or a tangle loses laps that no steering gives back (AC ranks by completed laps,
+-- and nothing can set them). So after 8 s standing still on track it's put back on the racing line where it was, at
+-- a spot with no car within 25 m. Only where nobody sees it: never the car being filmed or its rival, and more than
+-- 250 m from the camera at both ends. Only once it has been racing (a race session counts as started while the grid
+-- still waits for the lights), and never across the finish line (the lap it was on wouldn't count).
+local stuckCars = {}
+local function hiddenFromCamera(i, pos)
+  if i == watch.target or i == watch.partner or pos == nil then return false end
+  local ok, cam = try(ac, 'getCameraPosition')
+  return ok and cam ~= nil and pos:distance(cam) > 250
+end
+
+local function rescueStuck(i, c, step)
+  local sim = ac.getSim()
+  local s = stuckCars[i]
+  if not s then s = { raced = false, still = 0 } stuckCars[i] = s end
+  if not sim.isSessionStarted then s.raced, s.still = false, 0 return false end -- (on the grid, or a restart)
+  if (c.speedKmh or 0) > 40 then s.raced = true end
+  if not s.raced or field(c, 'isInPitlane') or (c.speedKmh or 0) >= 5 then s.still = 0 return false end
+  s.still = s.still + step
+  if s.still < 8 or not hiddenFromCamera(i, c.position) then return false end
+  s.still = 0
+  local len = math.max(field(sim, 'trackLengthM') or 5000, 500)
+  local here = c.splinePosition or 0
+  for _, k in ipairs({ 1, 2, 3, 4, 6, 8, 10, 12, -2, -4, -6, -8 }) do
+    local at = here + k * 10 / len
+    if at > 0 and at < 1 then
+      local ok, pos = try(ac, 'trackProgressToWorldCoordinate', at)
+      local clear = ok and pos ~= nil and hiddenFromCamera(i, pos)
+      for j = 0, sim.carsCount - 1 do
+        local other = clear and j ~= i and ac.getCar(j)
+        if other and other.position and other.position:distance(pos) < 25 then clear = false end
+      end
+      if clear then
+        if try(physics, 'setCarPosition', i, pos, nil) then try(physics, 'setCarVelocity', i, vec3(0, 0, 0)) end
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local function releaseCar(i, e)
   pcall(physics.setAIThrottleLimit, i, 1)
   pcall(physics.setExtraAIGrip, i, 1.2)
@@ -1188,7 +1230,7 @@ local function retireCar(i, e, c)
   end
 end
 
-local function steerToRealResult()
+local function steerToRealResult(step)
   local sim = ac.getSim()
   local session = field(sim, 'raceSessionType')
   if session == nil or not has(ac, 'SessionType') then error('this CSP build can\'t tell the session type: needs a newer CSP', 0) end
@@ -1210,6 +1252,7 @@ local function steerToRealResult()
       elseif not e.pitting and not field(c, 'isRaceFinished') and not (i == 0 and userDriving()) then
         table.insert(running, { i = i, e = e, c = c })
         e.steered = true
+        if i ~= 0 then rescueStuck(i, c, step or 0.5) end -- (the user's car is rescued every tick, steered or not)
       elseif e.steered and not e.pitting then
         -- Finished (or you took over your seat): back to its normal pace and collisions.
         releaseCar(i, e)
@@ -2217,7 +2260,7 @@ function script.update(dt)
   if sim.currentSessionIndex ~= watch.session then
     watch.session = sim.currentSessionIndex
     watch.engaged, watch.userOff = false, false
-    watch.raced0, watch.stuck0 = false, 0
+    for k in pairs(stuckCars) do stuckCars[k] = nil end
     -- Each session is filmed afresh: laps, the flag, who has been shown; a race starts on your seat again.
     watch.fresh, watch.lastShown, watch.targetHeld = true, {}, 99
     for k in pairs(lapState) do lapState[k] = nil end
@@ -2266,33 +2309,8 @@ function script.update(dt)
     -- the real driver's car isn't the only one on the grid with a tired engine.
     local life = field(car, 'engineLifeLeft')
     if life and life < 1000 then try(physics, 'setCarEngineLife', 0, 1000) end
-    -- Stuck after a spin or a tangle: AdvancedAI recovers AI cars, but nothing recovers the user's car, and AC never
-    -- retires it. After 10 s standing still on track, it's put back on the racing line where it was, at a spot with no
-    -- car within 25 m. Only once it has been racing (a session counts as started while the grid still waits for the
-    -- lights, and putting it on the line then lands it on the car ahead).
-    if not sim.isSessionStarted then watch.raced0 = false end -- (back on the grid: a restart)
-    if (car.speedKmh or 0) > 40 then watch.raced0 = true end
-    if watch.raced0 and sim.isSessionStarted and not field(car, 'isInPitlane') and (car.speedKmh or 0) < 5 then
-      watch.stuck0 = (watch.stuck0 or 0) + step
-    else
-      watch.stuck0 = 0
-    end
-    if watch.stuck0 > 10 then
-      watch.stuck0 = 0
-      local len = math.max(field(sim, 'trackLengthM') or 5000, 500)
-      for k = 1, 12 do
-        local ok, pos = try(ac, 'trackProgressToWorldCoordinate', ((car.splinePosition or 0) + k * 10 / len) % 1)
-        local clear = ok and pos ~= nil
-        for j = 1, sim.carsCount - 1 do
-          local other = clear and ac.getCar(j)
-          if other and other.position and other.position:distance(pos) < 25 then clear = false end
-        end
-        if clear then
-          if try(physics, 'setCarPosition', 0, pos, nil) then try(physics, 'setCarVelocity', 0, vec3(0, 0, 0)) end
-          break
-        end
-      end
-    end
+    -- Stuck after a spin or a tangle: nothing else recovers the user's car, and AC never retires it.
+    rescueStuck(0, car, step)
     local fuel, maxFuel = field(car, 'fuel'), field(car, 'maxFuel')
     if fuel and maxFuel and maxFuel > 0 and fuel < maxFuel * 0.3 then try(physics, 'setCarFuel', 0, maxFuel) end
   end
@@ -2323,7 +2341,7 @@ function script.update(dt)
   if not real.loaded then loadRealResult() end
   if real.available then
     if real.enabled then
-      local ok, err = pcall(steerToRealResult)
+      local ok, err = pcall(steerToRealResult, step)
       real.status = not ok and tostring(err) or nil
     elseif real.wasEnabled then
       releaseAll()

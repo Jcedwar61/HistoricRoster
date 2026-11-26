@@ -45,7 +45,9 @@ public partial class MainWindow : Window
             try { await OpenWorkspaceAsync(); }
             catch (Exception ex) { App.LogError("Load", ex); Log("Error: " + ex.Message); SetStatus("Could not load: " + ex.Message); }
         };
-        Closing += (_, _) => SaveSettings();
+        Closing += (_, _) => { SaveSettings(); CompanionMute.Stop(); };
+        // Companion apps a crash of this program left muted during a watched race get their sound back.
+        CompanionMute.RestoreLeftovers();
         // Messages from the shared importers (e.g. rate-limit waits) go to the Activity log.
         RosterLog.Info = m => Dispatcher.BeginInvoke(() => { Log(m); SetStatus(m); });
         RosterLog.Warn = m => Dispatcher.BeginInvoke(() => Log("Warning: " + m));
@@ -950,6 +952,8 @@ public partial class MainWindow : Window
             var how = AcLauncher.Start(_ws.AcRoot, _ws.RaceIniPath);
             Log($"Starting Assetto Corsa {how} ...");
             SetStatus($"Assetto Corsa is starting {how}.");
+            // A watched race has no driver: CrewChief, SimHub and the like are muted until the game closes.
+            if (_setup?.Watch == true) CompanionMute.DuringWatchedRace(m => Dispatcher.BeginInvoke(() => Log(m)));
             if (StartSimCastBox.IsChecked == true && StartSimCastBox.Visibility == Visibility.Visible)
             {
                 // Never let the commentary stop a race from starting.
