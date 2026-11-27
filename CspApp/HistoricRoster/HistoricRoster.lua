@@ -1177,6 +1177,11 @@ end
 -- Each car's pace as the real-result steering wants it (AI level, extra grip, throttle limit), applied together
 -- with the race-craft adjustments by applyPace. One place sets them, so nothing overwrites anything.
 local pace = {}
+-- Historic Roster's own Safety Car (the module is further down): its phase is read by the steering and the race-craft,
+-- which stand back while it's out, and by the Safety Car guard, which leaves it alone then.
+local scm = { phase = 'idle', car = nil, since = 0, laps = 0, leaderLap = -1, lastEnd = -1e9, stopped = {}, placeTries = 0 }
+local function scActive() return scm.phase ~= 'idle' end
+
 -- Every AI car's extra grip starts a little above AC's own 1.2: the AI spins and runs wide less, and the same for every
 -- car, so it doesn't change who's quicker.
 local GRIP_BASE = 1.25
@@ -1357,6 +1362,11 @@ local function steerToRealResult(step)
     end
   end
   if #running == 0 then return end
+  if scActive() then
+    -- Behind the Safety Car: no pace steering and no reordering; the field runs as it queues.
+    for _, r in ipairs(running) do pace[r.i] = { level = r.e.baseLevel, grip = GRIP_BASE, throttle = 1 } end
+    return
+  end
 
   -- Where each running car should be: finishers by real position, then the cars still to retire (latest first).
   local want = {}
@@ -1543,13 +1553,19 @@ local function hraiTick(now)
     if racing then hraiIncident(i, c, now) end
     local p = pace[i] or {}
     local throttle, grip, caution, offset = p.throttle or 1, p.grip or GRIP_BASE, 1, 0
-    if racing and dangerAhead(c) then caution, throttle, grip = 1.5, math.min(throttle, 0.85), grip + 0.04 end
+    local underSc = scActive()
+    if underSc then caution, throttle = 2, 1 end
+    if racing and not underSc and dangerAhead(c) then caution, throttle, grip = 1.5, math.min(throttle, 0.85), grip + 0.04 end
     local side = field(c, 'side')
     for _, b in ipairs(cars) do
-      if racing and b.i ~= i and side and b.c.position and c.position then
+      if racing and not underSc and b.i ~= i and side and b.c.position and c.position then
         local ahead = progressDelta(b.c.splinePosition or 0, c.splinePosition or 0) * len -- metres b is ahead of a
         local lateral = b.c.position:clone():sub(c.position):dot(side)                   -- metres b is to a's side
-        if ahead < 0 and ahead > -60 and b.run - a.run > 0.5 then
+        if ahead > 0 and ahead < 250 and (b.c.speedKmh or 0) < 10 then
+          -- Local yellow: slow, careful, away from the stopped car.
+          caution, throttle = math.max(caution, 1.8), math.min(throttle, 0.85)
+          if ahead < 80 then offset = lateral > 0 and -0.5 or 0.5 end
+        elseif ahead < 0 and ahead > -60 and b.run - a.run > 0.5 then
           offset = lateral > 0 and -0.6 or 0.6 -- (blue flag: away from the car lapping it)
           throttle = math.min(throttle, 0.9)
         elseif math.abs(ahead) < 6 and math.abs(lateral) < 2.4 then
@@ -2359,72 +2375,10 @@ local function updateDirector(dt)
 end
 
 -- ------------------------------------------------------------------ the Safety Car never races
--- The program can put AdvancedAI's Safety Car at the back of the grid. With AdvancedAI switched on, AdvancedAI holds
--- it in its pit box (with AC's own start delay) and sends it out only to neutralise the race: then the Safety Car is
--- left entirely to AdvancedAI, and anything this app did to it is undone. With AdvancedAI switched off, Assetto Corsa
--- would race it like any other AI car: then, in every offline session, driven or watched, it is sent to its pit box
--- and parked there (no AI input).
--- Whether AdvancedAI is on comes from its journal (Documents\Assetto Corsa\logs\AdvancedIA.log), where it writes a
--- summary with its state ("garde disabled", "guard ready" ...) when a session starts and every minute. When that
--- can't be told (journal switched off, a format this app doesn't know), the Safety Car is parked only once it's
--- plainly racing: driving on track, out of the pit lane, for 10 s, without ever having been in the pits.
+-- The program can put a Safety Car at the back of the grid of a Historic Roster race. It's Historic Roster's own (see
+-- below): until it's sent out, it's parked in its pit box (no AI input), in every session, driven or watched, or
+-- Assetto Corsa would race it like any other AI car.
 local safetyGuard = { timer = 0, session = -1, startedAt = nil, seenInPits = {}, racing = {}, parked = {}, held = {}, noted = false }
-
--- AdvancedAI's state words: running the race, or not running it.
-local aiaOn = { ready = true, paused = true, finished = true, init = true, dt = true, replay = true }
-local aiaOff = { disabled = true, nosections = true, spline = true, panic = true }
-local aiaState = { value = nil, readAt = -1e9 }
-
--- 'on', 'off', or nil when it can't be told: from AdvancedAI's latest summary in this launch, if under 150 s old.
-local function advancedAiState()
-  local now = clock()
-  if now - aiaState.readAt < (aiaState.value and 20 or 5) then return aiaState.value end
-  aiaState.readAt = now
-  local value = nil
-  pcall(function()
-    local f = io.open(ac.getFolder(ac.FolderID.Logs) .. '/AdvancedIA.log', 'rb')
-    if not f then return end
-    local size = f:seek('end') or 0
-    f:seek('set', math.max(0, size - 32768))
-    local text = f:read('*a') or ''
-    f:close()
-    local stamp, state, tabs
-    for line in text:gmatch('[^\r\n]+') do
-      if line:sub(1, 3) == '===' then
-        stamp, state, tabs = nil, nil, nil -- a new launch: only its own summaries count
-      else
-        -- The sections switched on this session ("onglets: general,blue,... ; ...").
-        local list = line:match('onglets: ([%a,]+)') or line:match('tabs: ([%a,]+)')
-        if list then
-          tabs = {}
-          for t in list:gmatch('%a+') do tabs[t] = true end
-        end
-        local s = line:match('[%s,|]garde (%a+)') or line:match('[%s,|]guard (%a+)')
-        local y, mo, d, h, mi, se = line:match('^(%d+)%-(%d+)%-(%d+) (%d+):(%d+):(%d+)')
-        if s and y then
-          stamp = os.time({ year = tonumber(y), month = tonumber(mo), day = tonumber(d),
-                            hour = tonumber(h), min = tonumber(mi), sec = tonumber(se) })
-          state = s
-        end
-      end
-    end
-    if state and stamp and math.abs(os.time() - stamp) <= 150 then
-      value = aiaOff[state] and 'off' or aiaOn[state] and 'on' or nil
-    end
-    aiaState.tabs = tabs
-  end)
-  aiaState.value = value
-  return value
-end
-
--- AdvancedAI runs the Safety Car only when it's on with its Accidents section (where the Safety Car lives). Set up
--- to drive the cars only, it leaves the Safety Car alone, so this app has to keep it in its pit box. 'on', 'off' or
--- nil (can't be told).
-local function advancedAiSafetyCar()
-  local state = advancedAiState()
-  if state == 'on' and aiaState.tabs and not aiaState.tabs.accidents then return 'off' end
-  return state
-end
 
 -- Parks it: held where it stands at once (no AI input, so it never pulls away), then, once the session has been
 -- running 5 s and the field has left it behind, put straight into its pit box (physics.setCarPosition to the car's
@@ -2436,7 +2390,7 @@ local function parkSafetyCar(i, c, why)
   if not p then
     p = { since = clock() }
     safetyGuard.parked[i] = p
-    if not safetyGuard.noted then
+    if not safetyGuard.noted and why then
       safetyGuard.noted = true
       try(ac, 'setMessage', 'Historic Roster', 'Safety Car kept in its pit box: ' .. why)
     end
@@ -2459,13 +2413,6 @@ local function parkSafetyCar(i, c, why)
   if try(physics, 'setAINoInput', i, true) then safetyGuard.held[i] = true end
 end
 
--- AdvancedAI is running the Safety Car: hand it back exactly as AdvancedAI expects it.
-local function releaseSafetyCar(i)
-  if safetyGuard.held[i] then try(physics, 'setAINoInput', i, false) end
-  if safetyGuard.parked[i] and safetyGuard.parked[i].driving then try(physics, 'setAIPitStopRequest', i, false) end
-  safetyGuard.held[i], safetyGuard.parked[i] = nil, nil
-end
-
 local function guardSafetyCar(dt)
   local sim = ac.getSim()
   if sim.isOnlineRace or sim.isReplayActive then return end
@@ -2485,39 +2432,229 @@ local function guardSafetyCar(dt)
   end
   if sim.isSessionStarted and not safetyGuard.startedAt then safetyGuard.startedAt = clock() end
 
-  local state = advancedAiSafetyCar()
-  local race = sessionKind() == 'race'
+  -- Only in a Historic Roster race: another race's Safety Car belongs to whatever put it there.
+  if not ourRaceConfig() then return end
   for i in pairs(raceCars.safety) do
     local c = ac.getCar(i)
-    if c then
-      if state == 'on' then
-        -- AdvancedAI runs it (and can send it out): hands off, and undo a park from before it was known to be on.
-        if safetyGuard.parked[i] or safetyGuard.held[i] then releaseSafetyCar(i) end
-      elseif state == 'off' then
-        parkSafetyCar(i, c, 'AdvancedAI isn\'t running it, so it would race like any other car.')
-      elseif safetyGuard.parked[i] or safetyGuard.held[i] then
-        parkSafetyCar(i, c, 'it was racing like any other car.')
-      else
-        -- AdvancedAI's state unknown: park it only once it's plainly racing.
-        local inPits = field(c, 'isInPitlane') or field(c, 'isInPit')
-        if inPits then safetyGuard.seenInPits[i] = true end
-        local moving = sim.isSessionStarted and not inPits and (c.speedKmh or 0) > (race and 30 or 20)
-        safetyGuard.racing[i] = moving and (safetyGuard.racing[i] or 0) + step or 0
-        local loose
-        if race then
-          loose = not safetyGuard.seenInPits[i] and safetyGuard.racing[i] >= 10
-        else
-          loose = safetyGuard.racing[i] >= 3
-        end
-        if loose then parkSafetyCar(i, c, 'it was racing like any other car.') end
+    if c and not (scm.phase ~= 'idle' and scm.car == i) then parkSafetyCar(i, c) end
+  end
+end
+
+-- ------------------------------------------------------------------ Historic Roster's own Safety Car
+-- When the program put a Safety Car on the grid (it waits in its pit box), it comes out as on TV, in any Historic
+-- Roster race (driven or watched), from 3 % to 90 % of the race distance and not within 4 minutes of the last one:
+--  * when a car has been standing still on the track for 6 s, or two cars are stopped at once;
+--  * it's put on the racing line 250 m ahead of the leader (where the camera doesn't see it arrive), and runs at
+--    SC_KMH; every car's top speed is held to the car ahead's (so nobody overtakes), cars further back can close up;
+--  * once nothing is stopped on the track and the leader has done 2 laps behind it: "Safety Car in this lap"; it
+--    heads for the pits, and when the leader crosses the line the race is green again;
+--  * meanwhile the real-result steering and the race-craft's danger points and blue flags stand back.
+local SC_KMH = 130
+
+local function raceLeader()
+  local best, bestPos = nil, 999
+  for i = 0, ac.getSim().carsCount - 1 do
+    local c = ac.getCar(i)
+    if c and isRaceCar(i) and (c.racePosition or 0) > 0 and c.racePosition < bestPos then best, bestPos = c, c.racePosition end
+  end
+  return best
+end
+
+local function scMessage(title, text)
+  try(ac, 'setMessage', title, text)
+  journal(title .. ': ' .. text)
+end
+
+local function scRelease()
+  local sim = ac.getSim()
+  for i = 0, sim.carsCount - 1 do try(physics, 'setAITopSpeed', i, 1e9) end
+end
+
+local function runSafetyCar(dt)
+  local sim = ac.getSim()
+  if sim.isOnlineRace or sim.isReplayActive or not hasSpline() then return end
+  scm.timer = (scm.timer or 0) + dt
+  if scm.timer < 0.5 then return end
+  local step = scm.timer
+  scm.timer = 0
+  if sessionKind() ~= 'race' or not ourRaceConfig() then return end
+  if not raceCars.loaded then loadRaceCars() end
+  local scIndex = next(raceCars.safety)
+  if scIndex == nil then return end
+  if not sim.isSessionStarted then
+    -- On the grid (or back on it after a restart): no Safety Car.
+    if scm.phase ~= 'idle' then scRelease() end
+    scm.phase, scm.stopped = 'idle', {}
+    return
+  end
+  local leader = raceLeader()
+  if not leader then return end
+  local now, len, laps = clock(), trackLen(), raceLaps()
+  local progress = laps > 0 and ((leader.lapCount or 0) + (leader.splinePosition or 0)) / laps or 0
+
+  -- Cars stopped out on the track (not the ones retiring into the pits as in real life).
+  local onTrack, anywhere = 0, 0
+  local order = {}
+  for i = 0, sim.carsCount - 1 do
+    local c = ac.getCar(i)
+    local e = real.cars[i]
+    if c and isRaceCar(i) and not (e and (e.pitting or e.retired)) and not field(c, 'isInPitlane') and not field(c, 'isRaceFinished') then
+      scm.stopped[i] = (c.speedKmh or 0) < 5 and (scm.stopped[i] or 0) + step or 0
+      if scm.stopped[i] > 6 then
+        anywhere = anywhere + 1
+        if (field(c, 'wheelsOutside') or 0) < 3 then onTrack = onTrack + 1 end
       end
+      table.insert(order, { i = i, c = c, run = (c.lapCount or 0) + (c.splinePosition or 0) })
+    else
+      scm.stopped[i] = 0
     end
   end
+  local sc = ac.getCar(scIndex)
+
+  if scm.phase == 'idle' then
+    if sc and progress > 0.03 and progress < 0.9 and now - scm.lastEnd > 240 and (onTrack >= 1 or anywhere >= 2) then
+      scm.phase, scm.car, scm.since, scm.laps, scm.leaderLap, scm.placeTries = 'out', scIndex, now, 0, leader.lapCount or 0, 0
+      scMessage('SAFETY CAR', 'Safety Car deployed: no overtaking.')
+    end
+    return
+  end
+
+  if scm.phase == 'out' then
+    -- Onto the racing line ahead of the leader, where the camera doesn't see it arrive (after 10 s, anywhere clear).
+    scm.placeTries = scm.placeTries + 1
+    local ok, pos = try(ac, 'trackProgressToWorldCoordinate', ((leader.splinePosition or 0) + 250 / len) % 1)
+    if ok and pos and (hiddenFromCamera(scIndex, pos) or scm.placeTries > 20) and clearOf(pos, scIndex) then
+      safetyGuard.held[scIndex], safetyGuard.parked[scIndex] = nil, nil
+      try(physics, 'setAINoInput', scIndex, false)
+      try(physics, 'setAIPitStopRequest', scIndex, false)
+      if try(physics, 'setCarPosition', scIndex, pos, nil) then try(physics, 'setCarVelocity', scIndex, vec3(0, 0, 0)) end
+      try(physics, 'setAILevel', scIndex, 1)
+      scm.phase = 'lead'
+    end
+  end
+
+  if scm.phase == 'green' then
+    -- Racing again; the Safety Car heads into its pit box, where the guard parks it.
+    if not sc or field(sc, 'isInPitlane') or field(sc, 'isInPit') or now - scm.since > 90 then scm.phase = 'idle' end
+    return
+  end
+
+  -- The field behind it, in running order: no overtaking (each car held to the car ahead's speed), closing up.
+  table.sort(order, function(a, b) return a.run > b.run end)
+  for k, r in ipairs(order) do
+    local cap = SC_KMH + 70
+    if k == 1 then
+      local toSc = sc and scm.phase ~= 'out' and progressDelta(sc.splinePosition or 0, r.c.splinePosition or 0) * len
+      if toSc and toSc > 0 and toSc < 120 then cap = SC_KMH end
+    else
+      local ahead = order[k - 1]
+      if (ahead.run - r.run) * len < 60 then cap = math.max((ahead.c.speedKmh or SC_KMH) + 5, 60) end
+    end
+    try(physics, 'setAITopSpeed', r.i, cap)
+  end
+  if sc and scm.phase ~= 'out' then try(physics, 'setAITopSpeed', scIndex, SC_KMH) end
+
+  -- Laps behind it, and back to green.
+  if (leader.lapCount or 0) > scm.leaderLap then scm.laps, scm.leaderLap = scm.laps + 1, leader.lapCount or 0 end
+  if scm.phase == 'lead' and scm.laps >= 2 and onTrack == 0 and anywhere == 0 then
+    scm.phase, scm.inLap = 'in', leader.lapCount or 0
+    scMessage('SAFETY CAR', 'Safety Car in this lap.')
+  elseif scm.phase == 'in' then
+    if sc and (sc.splinePosition or 0) > 0.85 then try(physics, 'setAIPitStopRequest', scIndex, true) end
+    if (leader.lapCount or 0) > scm.inLap then
+      scRelease()
+      try(physics, 'setAIPitStopRequest', scIndex, true)
+      scm.phase, scm.since, scm.lastEnd = 'green', now, now
+      scMessage('GREEN FLAG', 'Racing resumes.')
+    end
+  end
+end
+
+-- The chequered flag, in the race's journal (the first car to finish).
+local flagSeen = { session = -1, done = false }
+local function noteChequeredFlag()
+  local sim = ac.getSim()
+  if sim.currentSessionIndex ~= flagSeen.session then flagSeen.session, flagSeen.done = sim.currentSessionIndex, false end
+  if flagSeen.done or sessionKind() ~= 'race' or not sim.isSessionStarted then return end
+  for i = 0, sim.carsCount - 1 do
+    local c = ac.getCar(i)
+    if c and isRaceCar(i) and field(c, 'isRaceFinished') then
+      flagSeen.done = true
+      journal('chequered flag: ' .. (ac.getDriverName(i) or '?') .. ' wins')
+      return
+    end
+  end
+end
+
+-- ------------------------------------------------------------------ the starting grid
+-- A Historic Roster race starts from a proper grid: the cars in their real grid order (as AC spawned them, from the
+-- race the program wrote), pole on its own slot, then every car 8 m behind the one ahead (the F1 rule: rows of two,
+-- 16 m apart, staggered on the two sides pole and second took), along the racing line. Many tracks' own start slots
+-- are packed much tighter, which piles cars into each other at the first corner. A track whose slots are already that
+-- far apart is left as it is. Driven and watched races alike, offline; done again after a restart.
+local grid = { session = -1, done = false, settle = 0, startedSeen = false }
+local GRID_SLOT = 8 -- metres from one grid slot to the next
+
+local function placeGrid(dt)
+  local sim = ac.getSim()
+  if sim.isOnlineRace or sim.isReplayActive or not hasSpline() then return end
+  if sim.currentSessionIndex ~= grid.session then
+    grid.session, grid.done, grid.settle, grid.startedSeen = sim.currentSessionIndex, false, 0, false
+  end
+  if sim.isSessionStarted then grid.startedSeen = true return end
+  if grid.startedSeen then grid.done, grid.settle, grid.startedSeen = false, 0, false end -- (back on the grid: a restart)
+  if grid.done or sessionKind() ~= 'race' or not ourRaceConfig() then return end
+  grid.settle = grid.settle + dt
+  if grid.settle < 1 then return end -- (let AC finish putting the cars on their slots)
+  grid.done = true
+
+  -- The cars in grid order: the one nearest the start line first.
+  local len = trackLen()
+  local cars = {}
+  for i = 0, sim.carsCount - 1 do
+    local c = ac.getCar(i)
+    if c and field(c, 'isConnected') ~= false and c.position and not field(c, 'isInPitlane') then
+      table.insert(cars, { i = i, c = c, d = progressDelta(c.splinePosition or 0, 0) })
+    end
+  end
+  if #cars < 3 then return end
+  table.sort(cars, function(a, b) return a.d > b.d end)
+  local spacing = (cars[1].d - cars[#cars].d) * len / (#cars - 1)
+  if spacing >= GRID_SLOT * 0.95 then
+    journal(string.format('grid: left as the track has it (%.1f m between slots)', spacing))
+    return
+  end
+
+  -- The two sides of the grid: where pole and second stand across the racing line.
+  local function frame(p)
+    local base = ac.trackProgressToWorldCoordinate(p % 1)
+    local dir = ac.trackProgressToWorldCoordinate((p + 2 / len) % 1):sub(base)
+    dir.y = 0
+    dir:normalize()
+    return base, dir, dir:cross(UP, vec3()):normalize()
+  end
+  local function lateral(r)
+    local base, _, side = frame(r.c.splinePosition or 0)
+    return r.c.position:clone():sub(base):dot(side)
+  end
+  local lanes = { lateral(cars[1]), lateral(cars[2]) }
+  if math.abs(lanes[1] - lanes[2]) < 1.5 then lanes = { -1.8, 1.8 } end -- (single file on the track: two lanes anyway)
+
+  local p0 = cars[1].c.splinePosition or 0
+  for k, r in ipairs(cars) do
+    local base, dir, side = frame(p0 - (k - 1) * GRID_SLOT / len)
+    local pos = base:clone():addScaled(side, lanes[(k - 1) % 2 + 1])
+    if try(physics, 'setCarPosition', r.i, pos, dir) then try(physics, 'setCarVelocity', r.i, vec3(0, 0, 0)) end
+  end
+  journal(string.format('grid: %d cars placed %d m apart (the track\'s slots were %.1f m)', #cars, GRID_SLOT, spacing))
 end
 
 function script.update(dt)
   -- Every offline session, watched or not.
   pcall(guardSafetyCar, dt)
+  pcall(placeGrid, dt)
+  pcall(runSafetyCar, dt)
+  pcall(noteChequeredFlag)
 
   if not watch.checked then
     watch.checked = true
@@ -2735,13 +2872,6 @@ local function tabWatch()
     if real.status then ui.textColored(real.status, colors.bad)
     elseif real.enabled then
       ui.textDisabled(real.outOfPlace == 0 and 'every car is in its real place' or (real.outOfPlace .. ' car(s) still out of their real place'))
-    end
-    -- AdvancedAI drives the AI cars in place of Kunos's stock AI; the real result is steered on top of it.
-    local aia = advancedAiState()
-    if aia == 'on' then
-      ui.textDisabled('AdvancedAI is driving the AI cars; "Finish as in real life" steers their pace on top of it.')
-    elseif aia == 'off' then
-      ui.textColored('AdvancedAI is switched off in its own window: Kunos\'s stock AI is driving the cars.', colors.head)
     end
   end
   ui.separator()

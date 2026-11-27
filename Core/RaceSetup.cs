@@ -283,8 +283,7 @@ public static class RosterOrder
 /// <summary>
 /// Writes an offline race into Documents\Assetto Corsa\cfg\race.ini the way Content Manager does: the existing
 /// file is kept (backed up first) and only the race, session, car, light, weather and temperature sections are set.
-/// Compatible with the AdvancedIA and Stretched Grid CSP apps: sessions carry TYPE/NAME (read by AdvancedIA), and
-/// the race session carries STARTING_POSITION (read by Stretched Grid from SESSION_0).
+/// The race session carries the player's real grid slot (STARTING_POSITION); the in-game app lays out the grid.
 /// </summary>
 public static class RaceIniWriter
 {
@@ -440,8 +439,8 @@ public static class RaceIniWriter
         ini.Set(WatchSection, "TRACK", setup.Track.Folder!);
         ini.Set(WatchSection, "CARS", cars.Count.ToString(CultureInfo.InvariantCulture));
 
-        // The Safety Car, in every race: the in-game app keeps it in the pits when AdvancedAI isn't running it (AC
-        // would race it like any other AI car) and never films it.
+        // The Safety Car: the in-game app keeps it in its pit box until it sends it out (AC would race it like any
+        // other AI car) and never films it.
         var safetyIndex = cars.FindIndex(s => s.IsSafetyCar);
         if (safetyIndex >= 0) ini.Set(WatchSection, "SAFETY_CAR", safetyIndex.ToString(CultureInfo.InvariantCulture));
 
@@ -491,7 +490,7 @@ public static class RaceIniWriter
         ini.Set("TEMPERATURE", "AMBIENT", setup.AmbientTemperature.ToString(CultureInfo.InvariantCulture));
         ini.Set("TEMPERATURE", "ROAD", setup.RoadTemperature.ToString(CultureInfo.InvariantCulture));
 
-        // Sessions. The race keeps the player's real grid slot (Stretched Grid reads SESSION_0's STARTING_POSITION).
+        // Sessions. The race keeps the player's real grid slot (STARTING_POSITION).
         var index = 0;
         void Session(string name, int type, Action<string> fill)
         {
@@ -650,8 +649,8 @@ public static class InGameApp
     }
 }
 
-/// <summary>Installed CSP apps the program works together with.</summary>
-public record CompanionApps(bool AdvancedIA, bool StretchedGrid, string SafetyCarModel, bool SafetyCarInstalled, string? SafetyCarSkin)
+/// <summary>What's installed that the program works together with: CSP, the in-game app and the Safety Car.</summary>
+public record CompanionApps(string SafetyCarModel, bool SafetyCarInstalled, string? SafetyCarSkin)
 {
     public const string DefaultSafetyCar = "ferrari_458_s3";
 
@@ -665,28 +664,17 @@ public record CompanionApps(bool AdvancedIA, bool StretchedGrid, string SafetyCa
     public static CompanionApps Detect(string acRoot)
     {
         var apps = Path.Combine(acRoot, "apps", "lua");
-        var advanced = File.Exists(Path.Combine(apps, "AdvancedIA", "manifest.ini"));
-        var stretched = File.Exists(Path.Combine(apps, "Stretched Grid", "manifest.ini"));
-
-        // AdvancedIA's own setting, if the player changed it; otherwise its default model.
         var model = DefaultSafetyCar;
-        var state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            "Assetto Corsa", "cfg", "extension", "state", "lua", "app", "AdvancedIA.ini");
-        if (File.Exists(state))
-        {
-            var m = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(state), "safetyCarModel[^A-Za-z0-9_]{1,6}([A-Za-z0-9_.\\-]{3,64})");
-            if (m.Success) model = m.Groups[1].Value;
-        }
         var carDir = Path.Combine(acRoot, "content", "cars", model);
         var installed = Directory.Exists(carDir);
         string? skin = null;
         if (installed && Directory.Exists(Path.Combine(carDir, "skins")))
         {
             var skins = Directory.GetDirectories(Path.Combine(carDir, "skins")).Select(Path.GetFileName).ToList();
-            // AdvancedIA prefers a livery with "safety" in its name.
+            // A livery with "safety" in its name, if the car has one.
             skin = skins.FirstOrDefault(s => s!.Contains("safety", StringComparison.OrdinalIgnoreCase)) ?? skins.FirstOrDefault();
         }
-        return new CompanionApps(advanced, stretched, model, installed, skin)
+        return new CompanionApps(model, installed, skin)
         {
             Csp = File.Exists(Path.Combine(acRoot, "dwrite.dll")) && Directory.Exists(Path.Combine(acRoot, "extension")),
             HistoricRosterApp = File.Exists(Path.Combine(apps, "HistoricRoster", "manifest.ini")),
@@ -704,21 +692,17 @@ public record CompanionApps(bool AdvancedIA, bool StretchedGrid, string SafetyCa
 
     /// <summary>
     /// Adds the Safety Car ON TOP of the finished grid; it never takes a real car's place, whether you race or watch.
-    /// Returns null when added, else why it was left out:
-    /// - no free pit box (AC can't start more cars than the track's pit boxes; the real grid comes first);
-    /// - a car on the grid uses the Safety Car model (AdvancedIA treats every AI car of that model as a safety car
-    ///   and parks the extras, which would take a real car out of the race).
+    /// Returns null when added, else why it was left out (the in-game app runs it, and AC can't start more cars than
+    /// the track's pit boxes; the real grid comes first).
     /// </summary>
     public string? TryAddSafetyCar(RaceSetup setup, int? pitBoxes)
     {
-        // Without AdvancedAI nothing keeps the Safety Car in the pits: AC would race it like any other AI car.
-        if (!AdvancedIA) return "AdvancedAI isn't installed, so no Safety Car was added (it would race like any other car).";
+        // The in-game app (it needs CSP) runs the Safety Car; without it AC would race it like any other AI car.
+        if (!Csp) return "Custom Shaders Patch isn't installed, so no Safety Car was added (it would race like any other car).";
         if (!SafetyCarInstalled) return $"Safety Car {SafetyCarModel} isn't installed.";
         if (setup.Grid.Any(s => s.IsSafetyCar)) return null;
-        if (setup.Grid.Any(s => string.Equals(s.Car.Model, SafetyCarModel, StringComparison.OrdinalIgnoreCase)))
-            return $"A car on the grid is a {SafetyCarModel}, the Safety Car model: AdvancedAI would take it over, so no Safety Car was added.";
         if (pitBoxes is { } boxes && setup.Grid.Count >= boxes)
-            return $"All {boxes} pit boxes are taken by the real grid, so no Safety Car was added (AdvancedAI will use a VSC/FCY).";
+            return $"All {boxes} pit boxes are taken by the real grid, so no Safety Car was added.";
         setup.Grid.Add(SafetyCarSlot(setup.Grid.Count + 1));
         return null;
     }

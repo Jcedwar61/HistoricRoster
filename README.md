@@ -25,7 +25,7 @@ Contents:
 - The Historic Roster program
 - AI help (OpenAI and DeepSeek)
 - Live commentary with SimCast
-- Working with AdvancedAI and Stretched Grid
+- The grid, the Safety Car and the AI: all built in
 
 1. What it does
 2. The parts
@@ -216,37 +216,35 @@ settings when SimCast is installed:
 SimCast holds the real result back until your race is over by default (*Settings → Commentary → Real result* in
 SimCast). For the whole field it needs the CrewChiefEx app in Assetto Corsa, which SimCast switches on itself.
 
-## Working with AdvancedAI and Stretched Grid
+## The grid, the Safety Car and the AI: all built in
 
-Both are offline CSP apps, and the race the program writes is made to work with them:
+Historic Roster needs no other CSP apps for a race. The in-game app (installed by the program
+before every race when Custom Shaders Patch is there) does it all, offline, in the races the
+program writes; other races are left alone.
 
-- **AdvancedAI** drives the AI cars in place of Kunos's stock AI and applies its racing rules and
-  penalties. It reads each session's type from `race.ini`; the program writes proper Practice /
-  Qualifying / Race sessions. Before a watched race the program patches AdvancedAI (a few lines;
-  the originals are kept as `*.hr-orig`) so that **in a watched race only** it never retires or
-  disqualifies a car (cars finish or retire as they did in real life), never sends a stuck car to
-  its pit box (a lap lost), and leaves your car alone: no penalties, flags, panel, messages or
-  beeps for it. An AdvancedAI version the program doesn't know (after an AdvancedAI update) is
-  left unpatched, and the Activity log says so. For races, AdvancedAI wants
-  its Safety Car model on the grid (default `ferrari_458_s3`; the program reads your AdvancedAI
-  setting). **Add AdvancedAI Safety Car** (off by default, because AI behaviour around it can be
-  unreliable) puts it at the back of the grid, using a livery with
-  "safety" in its name when the car has one. It's optional: untick it for a race without a Safety
-  Car (AdvancedAI then uses a VSC or FCY). The choice is saved as soon as you change it.
-  **The Safety Car never races.** With AdvancedAI switched on, AdvancedAI keeps it in its pit box
-  and only sends it out to neutralise the race; the Historic Roster in-game app leaves it alone.
-  With AdvancedAI switched off in its own settings, the in-game app parks it in its pit box for the
-  whole session, and Assetto Corsa says *Safety Car kept in its pit box*. The app tells the two
-  apart from AdvancedAI's journal, which also says whether its Accidents section (where the Safety
-  Car lives) is on: without it AdvancedAI doesn't run the Safety Car, so the app parks it. It reads `Documents\Assetto Corsa\logs\AdvancedIA.log`. If that
-  journal is switched off, the app parks the Safety Car only once it has raced for 10 seconds
-  without having been in the pits (in practice and qualifying, 3 seconds on track).
-- **Stretched Grid** reads the first session's type and, for a race, `STARTING_POSITION` from
-  `race.ini`. The program writes your driver's real grid slot there, so Stretched Grid places you
-  correctly. With qualifying first, your slot comes from qualifying.
-- Stretched Grid isn't touched. Both apps only work offline, so the server
-  plugin and the in-game app (online) don't interfere with them.
-- The grid is limited to the track's pit boxes (Assetto Corsa's own limit). The Safety Car is added on top of the real grid and never takes a real car's place: if every pit box is used by a real car, or a real car uses the Safety Car model, no Safety Car is added and the program says so (AdvancedAI then uses a VSC/FCY).
+- **The starting grid.** Each car starts from its real grid slot. Where a track's grid boxes are
+  too tight for the field, the in-game app lays the grid out itself before the start: every car
+  8 m behind the one ahead, in the two lanes of the first two grid boxes. A grid that is already
+  spaced well is left as it is, and a restart lays it out again. Your driver's real slot is also
+  written to `race.ini` (`STARTING_POSITION`); with qualifying first, it comes from qualifying.
+- **The Safety Car.** **Add a Safety Car** (off by default) puts one (`ferrari_458_s3`, using a
+  livery with "safety" in its name when the car has one) at the back of the grid. It never races:
+  the in-game app keeps it in its pit box. It's sent out when a car has stood still on the track
+  for 6 seconds (or two cars have), between 3 % and 90 % of the race and no sooner than 4 minutes
+  after the last one. It joins out of shot ahead of the leader and the field closes up behind it
+  at Safety Car speed. Once the track has been clear for two laps, *Safety Car in
+  this lap* is shown, it peels into the pits, and the race goes green when the leader crosses the
+  line. Untick it for a race without a Safety Car; the choice is saved as soon as you change it.
+- **The AI, in a watched race.** The in-game app drives the AI cars on top of Assetto Corsa's
+  own AI: cars back off at corners where cars have spun or gone off before (learned per track,
+  and kept for next time), slow down and move over for a car stopped ahead (local yellows), make
+  way for the leaders when they're lapped (blue flags), and leave room when side by side. At the
+  same time it steers every car to its real result (below).
+- The grid is limited to the track's pit boxes (Assetto Corsa's own limit). The Safety Car is
+  added on top of the real grid and never takes a real car's place: if every pit box is used by a
+  real car, no Safety Car is added and the program says so.
+- Other AI or grid apps (AdvancedAI, Stretched Grid and the like) aren't needed. Switch them off
+  for Historic Roster races, as they would drive the same cars.
 
 ---
 
@@ -579,9 +577,8 @@ after a spin is put back on the racing line where it was after 8 seconds, out of
 doesn't lose laps, and no car that finished in real life is retired by AC. Cars that really retired go into the pits at the same point of the race (scaled to your
 race length) and park there, and AC's own random AI retirements are switched off. The Watch tab
 shows how many cars are still out of their real place, and **Finish as in real life** turns it
-off. Keep AdvancedAI switched on (in its own window): it drives the AI cars in place of Kunos's
-stock AI, and the real result is steered on top of it. The Watch tab says when AdvancedAI is
-switched off and the stock AI is driving.
+off. Nothing else needs to be installed or switched on: the in-game app drives the AI itself (see
+*The grid, the Safety Car and the AI: all built in*).
 
 **Multi-class races.** Endurance races with several classes on one grid (LMP1, LMP2, GTE Pro, GT3,
 prototypes ...) are handled class by class:

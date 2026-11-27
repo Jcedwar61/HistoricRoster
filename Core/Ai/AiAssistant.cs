@@ -154,7 +154,7 @@ public class AiAssistant
     {
         var s = new StringBuilder(Persona);
         s.AppendLine();
-        s.AppendLine("Help the user with the program (setting up races, matching mods, liveries, seasons, AdvancedAI, Content Manager, CSP, " +
+        s.AppendLine("Help the user with the program (setting up races, matching mods, liveries, seasons, the Safety Car, Content Manager, CSP, " +
                      "errors in the activity log) and with motorsport history and Assetto Corsa in general. Be concise and practical: name the exact " +
                      "buttons and settings from the guide. If the guide doesn't cover something, say so.");
         if (!string.IsNullOrWhiteSpace(context)) s.AppendLine().AppendLine("=== What the user has open now ===").AppendLine(context.Trim());

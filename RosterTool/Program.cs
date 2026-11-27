@@ -117,7 +117,7 @@ int Find()
     Console.WriteLine($"Cars: {lib.Cars.Count} ({lib.Cars.Count(x => !x.Kunos)} mods)   Track layouts: {lib.Tracks.Count}");
     Console.WriteLine($"CSP: {(Directory.Exists(Path.Combine(ws.AcRoot, "extension")) ? "installed" : "not found")}");
     var apps = CompanionApps.Detect(ws.AcRoot);
-    Console.WriteLine($"AdvancedAI: {(apps.AdvancedIA ? "installed" : "no")}   Stretched Grid: {(apps.StretchedGrid ? "installed" : "no")}   " +
+    Console.WriteLine($"Historic Roster in-game app: {(apps.HistoricRosterApp ? "installed" : "no")}   " +
                       $"Safety Car {apps.SafetyCarModel}: {(apps.SafetyCarInstalled ? "installed" : "not installed")}");
     foreach (var g in lib.Cars.Where(x => x.Category != null).GroupBy(x => x.Category!).OrderBy(g => g.Key))
         Console.WriteLine($"  {g.Key,-9} {g.Count(),3} cars: {string.Join(", ", g.Take(6).Select(x => x.Folder))}{(g.Count() > 6 ? ", ..." : "")}");
@@ -229,8 +229,6 @@ int Race()
         if (!apps.CanWatch)
             throw new InvalidOperationException("Watching an AI race needs Custom Shaders Patch and the Historic Roster in-game app (RosterTool install-app).");
         setup.Watch = true;
-        // AdvancedIA drives the AI and applies the rules; in a watched race the real result decides who retires.
-        if (AdvancedIaPatch.Apply(ws.AcRoot) is { } patched) Console.WriteLine(patched);
     }
     if (cli.GetInt("laps") is { } laps) setup.Laps = laps;
     if (cli.GetInt("ai-level") is { } ai) setup.AiLevel = ai;
@@ -286,6 +284,8 @@ int Race()
     if (setup.LeftOut.Count > 0) Console.WriteLine($"{setup.LeftOut.Count} real car(s) left out (RosterTool install {roster.Id}).");
     LastRace.Record(setup, null).Save();
     if (cli.Has("safety-car") && !apps.SafetyCarInstalled) Console.WriteLine($"Safety Car {apps.SafetyCarModel} isn't installed; not added.");
+    if (setup.Grid.Any(s => s.IsSafetyCar) && !apps.HistoricRosterApp)
+        Console.WriteLine("The Safety Car needs the Historic Roster in-game app to keep it in the pits: run RosterTool install-app.");
     if (cli.Has("cm") || cli.Get("cm-presets") != null)
     {
         var presets = cli.Get("cm-presets") ?? CmPresetWriter.PresetsFolder()

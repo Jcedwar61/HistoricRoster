@@ -185,7 +185,7 @@ public class AppSettings
     public string? RostersFolder { get; set; }
     public double AiLevel { get; set; } = 95;
     public double AiAggression { get; set; } = 50;
-    /// <summary>Off by default: AI behaviour around the AdvancedAI Safety Car can be unreliable.</summary>
+    /// <summary>Off by default: a race without the Safety Car unless it's ticked.</summary>
     public bool AddSafetyCar { get; set; }
     public bool StandIns { get; set; } = true;
     public bool RealSkill { get; set; } = true;

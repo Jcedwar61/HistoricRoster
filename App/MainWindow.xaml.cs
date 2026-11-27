@@ -176,8 +176,6 @@ public partial class MainWindow : Window
         _apps = CompanionApps.Detect(_ws.AcRoot);
         var lib = await Task.Run(() => _ws.Library);
         var parts = new List<string> { $"Assetto Corsa: {_ws.AcRoot}", $"{lib.Cars.Count} cars", $"{lib.Tracks.Count} track layouts" };
-        if (_apps.AdvancedIA) parts.Add("AdvancedAI app found");
-        if (_apps.StretchedGrid) parts.Add("Stretched Grid app found");
         InstallText.Text = string.Join("  ·  ", parts);
         FillWeather();
         UpdateCompanionText();
@@ -289,16 +287,13 @@ public partial class MainWindow : Window
         _updatingUi = false;
     }
 
-    /// <summary>Re-checks the companion apps (Content Manager can switch AdvancedAI on or off while this program is
-    /// open, by moving it between apps\lua and apps\lua-off). True when something changed.</summary>
+    /// <summary>Re-checks what's installed (CSP, the in-game app, the Safety Car), which can change while this
+    /// program is open. True when something changed.</summary>
     private bool RefreshApps()
     {
         if (_ws == null || _apps == null) return false;
         var now = CompanionApps.Detect(_ws.AcRoot);
         if (now == _apps) return false;
-        if (now.AdvancedIA != _apps.AdvancedIA)
-            Log(now.AdvancedIA ? "AdvancedAI is switched on: the Safety Car can be added."
-                               : "AdvancedAI is switched off: no Safety Car is added (it would race like any other car).");
         _apps = now;
         UpdateCompanionText();
         return true;
@@ -308,18 +303,17 @@ public partial class MainWindow : Window
     {
         if (_apps == null) return;
         // A TextBlock, not a string: WPF would treat "_" in "ferrari_458_s3" as a keyboard-shortcut marker.
-        SafetyCarBox.Content = new TextBlock { Text = $"Add AdvancedAI Safety Car ({_apps.SafetyCarModel}) at the back of the grid" };
-        SafetyCarBox.ToolTip = "Optional. Untick for a race without a Safety Car (AdvancedAI then neutralises with a VSC/FCY).\n" +
-                               "AdvancedAI keeps the Safety Car in its pit box until it's needed; if AdvancedAI isn't running it,\n" +
-                               "the Historic Roster in-game app parks it there, so it never races.";
-        SafetyCarBox.IsEnabled = _apps.SafetyCarInstalled;
-        if (!_apps.SafetyCarInstalled) SafetyCarBox.IsChecked = false;
-        SafetyCarBox.Visibility = _apps.AdvancedIA ? Visibility.Visible : Visibility.Collapsed;
+        SafetyCarBox.Content = new TextBlock { Text = $"Add a Safety Car ({_apps.SafetyCarModel}) at the back of the grid" };
+        SafetyCarBox.ToolTip = "Optional. The Historic Roster in-game app keeps the Safety Car in its pit box and sends it out\n" +
+                               "when a car is stopped on the track; it leads the field for two laps once the track is clear.";
+        var canSafety = _apps.SafetyCarInstalled && _apps.Csp;
+        SafetyCarBox.IsEnabled = canSafety;
+        if (!canSafety) SafetyCarBox.IsChecked = false;
+        SafetyCarBox.Visibility = Visibility.Visible;
 
         var notes = new List<string>();
-        if (_apps.AdvancedIA) notes.Add("AdvancedAI reads the session type written here and takes over the AI.");
-        if (_apps.StretchedGrid) notes.Add("Stretched Grid places you at your real grid slot (STARTING_POSITION).");
-        if (_apps.AdvancedIA && !_apps.SafetyCarInstalled) notes.Add($"Safety Car {_apps.SafetyCarModel} isn't installed: AdvancedAI will use a VSC/FCY instead.");
+        if (!_apps.Csp) notes.Add("Custom Shaders Patch isn't installed: no Safety Car, grid layout or watched races.");
+        else if (!_apps.SafetyCarInstalled) notes.Add($"Safety Car {_apps.SafetyCarModel} isn't installed, so a race has no Safety Car.");
         CompanionText.Text = string.Join(" ", notes);
     }
 
@@ -479,8 +473,8 @@ public partial class MainWindow : Window
         if (_content == null || _ws == null || _apps == null) return;
         RefreshApps();
         var c = _content;
-        // Only AdvancedAI holds the Safety Car in the pits; without it the car would race like any AI car.
-        var safety = SafetyCarBox.IsChecked == true && _apps.AdvancedIA && _apps.SafetyCarInstalled;
+        // The in-game app (it needs CSP) holds the Safety Car in the pits; without it the car would race like any AI car.
+        var safety = SafetyCarBox.IsChecked == true && _apps.Csp && _apps.SafetyCarInstalled;
         _setup = null;
         _safetyCarNote = null;
         string? reason = null;
@@ -859,21 +853,23 @@ public partial class MainWindow : Window
         if (_setup.Laps > 120 &&
             MessageBox.Show($"The real race distance is {_setup.Laps} laps. Write it like that?", "Historic Roster",
                 MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return false;
-        if (_setup.Watch)
+        if (_setup.Watch || _apps?.Csp == true)
         {
-            // The in-game app turns the autopilot on for the seat you picked: make sure it's there and current.
+            // The in-game app runs the race: the grid, the Safety Car, and in a watched race the AI and the camera.
             try
             {
                 if (InGameApp.EnsureCurrent(_ws.AcRoot, BundledInGameApp) is { } done)
-                    Log($"Historic Roster in-game app {done} in {InGameApp.InstalledFolder(_ws.AcRoot)} (it drives your car in a watched race).");
-                // AdvancedIA drives the AI and applies the rules; in a watched race the real result decides who retires.
-                if (AdvancedIaPatch.Apply(_ws.AcRoot) is { } patched) Log(patched);
+                    Log($"Historic Roster in-game app {done} in {InGameApp.InstalledFolder(_ws.AcRoot)} (it runs the grid, the Safety Car and watched races).");
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Couldn't install the Historic Roster in-game app, which a watched race needs:\n" + ex.Message,
-                    "Historic Roster", MessageBoxButton.OK, MessageBoxImage.Error);
-                return false;
+                if (_setup.Watch)
+                {
+                    MessageBox.Show("Couldn't install the Historic Roster in-game app, which a watched race needs:\n" + ex.Message,
+                        "Historic Roster", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return false;
+                }
+                Log("Couldn't install the Historic Roster in-game app (no grid layout or Safety Car in this race): " + ex.Message);
             }
         }
         var path = RaceIniWriter.Write(_setup, _ws.RaceIniPath);
@@ -948,7 +944,7 @@ public partial class MainWindow : Window
                 MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
         try
         {
-            // AdvancedAI switched on or off since the race was set up: rebuild, so the Safety Car follows it.
+            // Something was installed or removed since the race was set up: rebuild, so the Safety Car follows it.
             if (RefreshApps()) BuildSetup();
             if (!WriteRace()) return;
             // Every race (driven or watched) starts through Content Manager when it's installed.
