@@ -1551,7 +1551,7 @@ local function steerToRealResult(step)
   local len = math.max(field(sim, 'trackLengthM') or 5000, 500)
   local letBy = {}
   for rank, r in ipairs(running) do
-    if (catchUp[r.i] or 0) > 0 or real.lost[r.i] or rank > wantRank[r.i] then
+    if leaderLaps >= 2 and ((catchUp[r.i] or 0) > 0 or real.lost[r.i] or rank > wantRank[r.i]) then
       local mine = lapsRun(r.c, r.e)
       for _, b in ipairs(running) do
         local d = (lapsRun(b.c, b.e) - mine) * len
@@ -1842,7 +1842,13 @@ local function hraiTick(now)
     local y = settled and not underSc and p.yieldTo and ac.getCar(p.yieldTo)
     if y and side and y.position and c.position then
       local behind = progressDelta(c.splinePosition or 0, y.splinePosition or 0) * len -- metres it is behind
-      if behind > -5 and behind < 150 then
+      local crowd = false
+      for _, b in ipairs(cars) do
+        if b.i ~= i and b.i ~= p.yieldTo and math.abs(progressDelta(b.c.splinePosition or 0, c.splinePosition or 0) * len) < 20 then
+          crowd = true
+        end
+      end
+      if behind > -5 and behind < 150 and not crowd then
         local lateral = y.position:clone():sub(c.position):dot(side)
         if math.abs(lateral) > 0.8 or not p.yieldSide then p.yieldSide = lateral > 0 and -1 or 1 end
         offset = 0.45 * p.yieldSide
