@@ -2953,7 +2953,7 @@ local pitGuard = { pressedAt = -1e9, stoppedAt = nil, releasedAt = nil, noted = 
 local function guardPitMenus()
   try(ac, 'disableQuickMenuPitstop', true)
   if pitGuard.noPits == nil then
-    local ok, st = try(ac, 'storage', 'hr.camPitStuck', '')
+    local ok, st = try(ac, 'storage', 'hr.camPitStuck2', '') -- (2: the first was set wrongly by a car's finish)
     pitGuard.store = ok and st or nil
     pitGuard.noPits = pitGuard.store ~= nil and pitGuard.store:get() == 'yes'
   end
@@ -2963,6 +2963,9 @@ local function guardPitMenus()
   if not car or not sim.isSessionStarted or userDriving() or not car.isAIControlled or (e and (e.pitting or e.retired)) then
     return
   end
+  -- Finished: AC drives the player's car into its pit box after the flag, and the session (and its result) ends with it
+  -- there. Left alone.
+  if field(car, 'isRaceFinished') then pitGuard.stoppedAt, pitGuard.releasedAt = nil, nil return end
   if not field(car, 'isInPit') then pitGuard.stoppedAt, pitGuard.releasedAt, pitGuard.noted = nil, nil, false return end
   local now = clock()
   pitGuard.stoppedAt = pitGuard.stoppedAt or now
