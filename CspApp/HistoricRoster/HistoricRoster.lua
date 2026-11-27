@@ -1213,6 +1213,7 @@ end
 local stuckCars = {}
 local movedAt = {} -- car index -> when Historic Roster last moved it (its sudden change of speed isn't an incident)
 local moveCheck = {} -- car index -> { lap, s }: a moved car, until it next crosses the line
+local tows = {}      -- car index -> { since, k, why }: a stuck car being pulled back onto the track
 local function hiddenFromCamera(i, pos)
   if i == watch.target or i == watch.partner or pos == nil then return false end
   local ok, cam = try(ac, 'getCameraPosition')
@@ -1236,7 +1237,8 @@ local function rescueStuck(i, c, step)
   if not s then s = { raced = false, still = 0 } stuckCars[i] = s end
   if not sim.isSessionStarted then s.raced, s.still, s.startAt = false, 0, nil return false end -- (on the grid, or a restart)
   s.startAt = s.startAt or clock()
-  if (c.speedKmh or 0) > 40 then s.raced = true end
+  if (c.speedKmh or 0) > 40 then s.raced, s.towTried = true, false end
+  if tows[i] then s.still, s.mark = 0, nil return false end -- (being towed: see towTick)
   -- (A car still standing 20 s after the start never got going: it's rescued too.)
   local going = s.raced or clock() - s.startAt > 20
   if not going or field(c, 'isInPitlane') then s.still, s.mark, s.lastS = 0, nil, nil return false end
@@ -1255,6 +1257,16 @@ local function rescueStuck(i, c, step)
   local why = s.still >= 30 and 'standing still 30 s' or beached and 'standing still off the track 10 s'
     or 'getting nowhere for 45 s'
   s.still, s.mark = 0, nil
+  -- AC doesn't count the lap of a car that jumps from one place to another after the first part of the lap (seen in
+  -- the journal: moved at 0.2, counted; at 0.39 or 0.8, not, with setCarPosition or setAICarPosition alike). Pulled
+  -- back onto the track it never jumps: so it's towed first, and moved only if the tow doesn't work.
+  if not s.towTried and has(physics, 'addForce') then
+    s.towTried = true
+    tows[i] = { since = clock(), k = 4, why = why }
+    journal(string.format('towing back onto the track after %s: %s', why, carLabel(i)))
+    return false
+  end
+  s.towTried = false
   local here = c.splinePosition or 0
   for _, k in ipairs({ 1, 2, 3, 4, 6, 8, 10, 12, -2, -4, -6, -8 }) do
     local at = here + k * 10 / len
@@ -1283,6 +1295,47 @@ local function rescueStuck(i, c, step)
     end
   end
   return false
+end
+
+-- Pulls a towed car towards the racing line 20 m ahead (inputs off, so it isn't braking against it), with a force
+-- that grows while it doesn't move and eases off once it does; done when all four wheels are back on the track, given
+-- up after 15 s (then it's moved, as before).
+local function towTick(dt)
+  local sim = ac.getSim()
+  local len = math.max(field(sim, 'trackLengthM') or 5000, 500)
+  for i, t in pairs(tows) do
+    local c = ac.getCar(i)
+    local now = clock()
+    local onTrack = c and (field(c, 'wheelsOutside') or 0) == 0 and now - t.since > 1
+    if not c or not sim.isSessionStarted or onTrack or now - t.since > 15 then
+      tows[i] = nil
+      try(physics, 'setAINoInput', i, false)
+      movedAt[i] = now
+      if c and onTrack then
+        journal(string.format('towed back onto the track: %s, in %.0f s', carLabel(i), now - t.since))
+      elseif c and sim.isSessionStarted then
+        journal(string.format('tow gave up after 15 s: %s (%d wheels off)', carLabel(i), field(c, 'wheelsOutside') or 0))
+        local st = stuckCars[i]
+        if st then st.still = 30 end -- (moved at the next tick, if hidden from the camera)
+      end
+    else
+      local ok, target = try(ac, 'trackProgressToWorldCoordinate', ((c.splinePosition or 0) + 20 / len) % 1)
+      if ok and target and c.position then
+        local dir = target:clone():sub(c.position)
+        dir.y = 0
+        if dir:length() > 0.5 then
+          dir:normalize()
+          local kmh = c.speedKmh or 0
+          if kmh < 5 then t.k = math.min(t.k * (1 + 1.5 * dt), 60) elseif kmh > 15 then t.k = t.k * (1 - 3 * dt) end
+          local mass = field(c, 'mass') or 700
+          local force = dir:scale(mass * t.k)
+          force.y = mass * t.k * 0.3 -- (a little lift: less of it dug into the gravel)
+          try(physics, 'setAINoInput', i, true)
+          try(physics, 'addForce', i, c.position, false, force, false)
+        end
+      end
+    end
+  end
 end
 
 -- No other car within 25 m of a spot.
@@ -2634,7 +2687,14 @@ local function runSafetyCar(dt)
     if sc and progress > 0.03 and progress < 0.9 and now - scm.lastEnd > 240 and (onTrack >= 1 or anywhere >= 2) then
       scm.phase, scm.car, scm.since, scm.laps, scm.leaderLap, scm.placeTries = 'out', scIndex, now, 0, leader.lapCount or 0, 0
       scm.going, scm.virtual = false, false
-      scMessage('SAFETY CAR', 'Safety Car deployed: no overtaking.')
+      if scm.physicalFailed then
+        -- The Safety Car car didn't work out once this race: virtual from the start (no car on the track for the
+        -- field to run into).
+        scm.phase, scm.virtual, scm.car, scm.placedAt = 'lead', true, nil, now
+        scMessage('VIRTUAL SAFETY CAR', 'Virtual Safety Car: hold your gap.')
+      else
+        scMessage('SAFETY CAR', 'Safety Car deployed: no overtaking.')
+      end
     end
     return
   end
@@ -2701,7 +2761,7 @@ local function runSafetyCar(dt)
       and progressDelta(sc.splinePosition or 0, leader.splinePosition or 0) * len < 150
     if not scm.going and (now - (scm.placedAt or now) > 10 or leaderOnIt) then
       -- It isn't moving: back to its pit box (the guard parks it once it isn't ours), and a virtual Safety Car.
-      scm.virtual, scm.car = true, nil
+      scm.virtual, scm.car, scm.physicalFailed = true, nil, true
       try(physics, 'setAITopSpeed', scIndex, 1e9)
       journal('the Safety Car didn\'t get going: virtual Safety Car instead')
       scMessage('VIRTUAL SAFETY CAR', 'Virtual Safety Car: hold your gap.')
@@ -2865,6 +2925,7 @@ function script.update(dt)
   end
   if not watch.on then return end
   local sim = ac.getSim()
+  if next(tows) then pcall(towTick, dt) end
 
   -- Every frame: the camera.
   if sim.isReplayActive then
