@@ -1260,9 +1260,11 @@ local function rescueStuck(i, c, step)
   -- AC doesn't count the lap of a car that jumps from one place to another after the first part of the lap (seen in
   -- the journal: moved at 0.2, counted; at 0.39 or 0.8, not, with setCarPosition or setAICarPosition alike). Pulled
   -- back onto the track it never jumps: so it's towed first, and moved only if the tow doesn't work.
-  if not s.towTried and has(physics, 'addForce') and (field(c, 'wheelsOutside') or 0) > 0 then
+  if not s.towTried and has(physics, 'addForce') then
     s.towTried = true
-    tows[i] = { since = clock(), k = 4, why = why }
+    -- (Off the track: towed until it's back on. Stopped on it, spun round or tangled with another car: pulled along the
+    -- racing line until it has gone 25 m.)
+    tows[i] = { since = clock(), k = 4, why = why, onTrack = (field(c, 'wheelsOutside') or 0) == 0, s0 = c.splinePosition or 0 }
     journal(string.format('towing back onto the track after %s: %s', why, carLabel(i)))
     return false
   end
@@ -1309,19 +1311,22 @@ local function towTick(dt)
   for i, t in pairs(tows) do
     local c = ac.getCar(i)
     local now = clock()
-    local onTrack = c and (field(c, 'wheelsOutside') or 0) == 0 and now - t.since > 1
+    local gone = c and ((c.splinePosition or 0) - t.s0) % 1 * len or 0
+    local onTrack = c and (t.onTrack and gone > 25 and gone < len / 2
+      or not t.onTrack and (field(c, 'wheelsOutside') or 0) == 0 and now - t.since > 1)
     if not c or not sim.isSessionStarted or onTrack or now - t.since > 25 then
       tows[i] = nil
       movedAt[i] = now
       if c and onTrack then
-        journal(string.format('towed back onto the track: %s, in %.0f s', carLabel(i), now - t.since))
+        journal(string.format(t.onTrack and 'pulled on along the track: %s, in %.0f s' or 'towed back onto the track: %s, in %.0f s',
+          carLabel(i), now - t.since))
       elseif c and sim.isSessionStarted then
-        journal(string.format('tow gave up after 25 s: %s (%d wheels off)', carLabel(i), field(c, 'wheelsOutside') or 0))
+        journal(string.format('tow gave up after 25 s: %s (%d wheels off, %.0f m on)', carLabel(i), field(c, 'wheelsOutside') or 0, gone))
         local st = stuckCars[i]
         if st then st.still = 30 end -- (moved at the next tick, if hidden from the camera)
       end
     else
-      local across = now - t.since > 8
+      local across = not t.onTrack and now - t.since > 8
       local ok, target = try(ac, 'trackProgressToWorldCoordinate', ((c.splinePosition or 0) + (across and 2 or 20) / len) % 1)
       if ok and target and c.position then
         local dir = target:clone():sub(c.position)
