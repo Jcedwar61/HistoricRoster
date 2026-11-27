@@ -1174,6 +1174,13 @@ local function carLabel(i)
     c and c.lapCount or -1, c and c.splinePosition or -1)
 end
 
+-- Each car's pace as the real-result steering wants it (AI level, extra grip, throttle limit), applied together
+-- with the race-craft adjustments by applyPace. One place sets them, so nothing overwrites anything.
+local pace = {}
+-- Every AI car's extra grip starts a little above AC's own 1.2: the AI spins and runs wide less, and the same for every
+-- car, so it doesn't change who's quicker.
+local GRIP_BASE = 1.25
+
 -- Laps run (completed laps + progress on the current one). Before a car first crosses the start line its
 -- track progress is ~0.99, so that part only counts once it has crossed.
 local function lapsRun(c, e)
@@ -1198,9 +1205,12 @@ local function rescueStuck(i, c, step)
   local sim = ac.getSim()
   local s = stuckCars[i]
   if not s then s = { raced = false, still = 0 } stuckCars[i] = s end
-  if not sim.isSessionStarted then s.raced, s.still = false, 0 return false end -- (on the grid, or a restart)
+  if not sim.isSessionStarted then s.raced, s.still, s.startAt = false, 0, nil return false end -- (on the grid, or a restart)
+  s.startAt = s.startAt or clock()
   if (c.speedKmh or 0) > 40 then s.raced = true end
-  if not s.raced or field(c, 'isInPitlane') or (c.speedKmh or 0) >= 5 then s.still = 0 return false end
+  -- (A car still standing 20 s after the start never got going: it's rescued too.)
+  local going = s.raced or clock() - s.startAt > 20
+  if not going or field(c, 'isInPitlane') or (c.speedKmh or 0) >= 5 then s.still = 0 return false end
   s.still = s.still + step
   if s.still < 8 or not hiddenFromCamera(i, c.position) then return false end
   s.still = 0
@@ -1235,11 +1245,12 @@ local function clearOf(pos, i)
   return true
 end
 
--- From half distance, the real order is restored where nobody sees it: when a car that finished ahead in real life
--- runs behind one that finished behind it, on the same lap, and neither is in shot, it's moved 40 m ahead of that car
--- along the racing line, at that car's speed (so it doesn't hold it up). Never across the finish line (the lap
--- wouldn't count) and never a car a lap down (AC ranks by completed laps, which nothing can set). One move every
--- 3 s, the same car at most every 20 s, so the race still looks like a race.
+-- From half distance, the real order is restored where nobody sees it: when a car runs ahead of one that finished
+-- ahead of it in real life, on the same lap, and neither is in shot, it's put back 40 m behind that car, along the
+-- racing line, at that car's speed. Always backwards: AC doesn't count a lap a car didn't drive, so moving a car
+-- forward would cost it the lap; put back, it just drives part of its lap again. Never back across the start line
+-- (the lap it completed would count twice), never a car a lap down (AC ranks by completed laps, which nothing can
+-- set), only on a straight. One move every 3 s, the same car at most every 20 s, so the race still looks like a race.
 local reorder = { at = -1e9, last = {} }
 local function reorderOffCamera(want)
   local now = clock()
@@ -1247,7 +1258,7 @@ local function reorderOffCamera(want)
   local len = math.max(field(ac.getSim(), 'trackLengthM') or 5000, 500)
   for k = 1, #want - 1 do
     -- a must be ahead of every car after it in the real order: b is the furthest ahead of those running in front of
-    -- it on the same lap.
+    -- it on the same lap, and the one put back.
     local a, b = want[k], nil
     local pa = lapsRun(a.c, a.e)
     for m = k + 1, #want do
@@ -1255,25 +1266,25 @@ local function reorderOffCamera(want)
       if (x.c.lapCount or 0) == (a.c.lapCount or 0) and lapsRun(x.c, x.e) > pa
         and (b == nil or lapsRun(x.c, x.e) > lapsRun(b.c, b.e)) then b = x end
     end
-    if b and now - (reorder.last[a.i] or -1e9) > 20 and not field(a.c, 'isInPitlane') and not field(b.c, 'isInPitlane')
+    if b and now - (reorder.last[b.i] or -1e9) > 20 and not field(a.c, 'isInPitlane') and not field(b.c, 'isInPitlane')
       and hiddenFromCamera(a.i, a.c.position) and hiddenFromCamera(b.i, b.c.position) then
-      local target = (b.c.splinePosition or 0) + 40 / len
-      if target < 0.99 and target > (a.c.splinePosition or 0) then
+      local target = (a.c.splinePosition or 0) - 40 / len
+      if target > 0.01 and target < (b.c.splinePosition or 0) then
         local ok, pos = try(ac, 'trackProgressToWorldCoordinate', target)
         -- Only on a straight (the line turns less than 9 degrees over the next 60 m): put in a corner at the speed of
-        -- a car on the straight behind, it would go straight off.
+        -- a car on a straight, it would go straight off.
         local ahead = ok and pos and ac.trackProgressToWorldCoordinate(math.min(target + 60 / len, 0.999))
         local back = ok and pos and ac.trackProgressToWorldCoordinate(math.max(target - 5 / len, 0))
         local dir = ahead and back and ahead:clone():sub(pos):normalize()
         local straight = dir and back and math.acos(math.clamp(dir:dot(pos:clone():sub(back):normalize()), -1, 1)) < 0.15
-        if straight and hiddenFromCamera(a.i, pos) and clearOf(pos, a.i) then
-          journal(string.format('real order: %s (real P%d) moved 40 m ahead of %s (real P%d)', carLabel(a.i), a.e.pos or 0,
-            carLabel(b.i), b.e.pos or 0))
-          -- At that car's speed, along the racing line.
-          if try(physics, 'setCarPosition', a.i, pos, nil) then
-            try(physics, 'setCarVelocity', a.i, dir:clone():scale((b.c.speedKmh or 0) / 3.6))
+        if straight and hiddenFromCamera(b.i, pos) and clearOf(pos, b.i) then
+          journal(string.format('real order: %s (real P%d) put back 40 m behind %s (real P%d)', carLabel(b.i), b.e.pos or 0,
+            carLabel(a.i), a.e.pos or 0))
+          -- At the speed of the car it now follows, along the racing line.
+          if try(physics, 'setCarPosition', b.i, pos, nil) then
+            try(physics, 'setCarVelocity', b.i, dir:clone():scale((a.c.speedKmh or 0) / 3.6))
           end
-          reorder.at, reorder.last[a.i] = now, now
+          reorder.at, reorder.last[b.i] = now, now
           return
         end
       end
@@ -1282,8 +1293,9 @@ local function reorderOffCamera(want)
 end
 
 local function releaseCar(i, e)
+  pace[i] = nil
   pcall(physics.setAIThrottleLimit, i, 1)
-  pcall(physics.setExtraAIGrip, i, 1.2)
+  pcall(physics.setExtraAIGrip, i, GRIP_BASE)
   pcall(physics.disableCarCollisions, i, false)
   if e.baseLevel then pcall(physics.setAILevel, i, e.baseLevel) end
 end
@@ -1361,20 +1373,45 @@ local function steerToRealResult(step)
   local progress = real.raceLaps > 0 and leaderLaps / real.raceLaps or 0
   local final = progress > 0.75
   real.outOfPlace = 0
+
+  -- Gaps as in real life. Each pair of finishers next to each other in the real order should be as many laps apart
+  -- as they really were (scaled to this race's length) plus a short spacing; the field never spreads out by laps the
+  -- real one didn't. A car falling too far behind the car it should follow gets more AI level and grip; the car ahead
+  -- of it, unless it's itself too far behind its own, is held back on the throttle. (Laps lost can't be won back:
+  -- AC ranks by completed laps. So the field is kept together from the start, not sorted at the end.)
+  local scale = real.realLaps > 0 and real.raceLaps > 0 and real.raceLaps / real.realLaps or 1
+  local catchUp, holdBack = {}, {}
+  local prev = nil
+  for _, r in ipairs(want) do
+    if r.e.pos > 0 then
+      if prev then
+        local wantGap = math.max(0, (prev.e.laps or 0) - (r.e.laps or 0)) * scale + 0.006
+        local excess = lapsRun(prev.c, prev.e) - lapsRun(r.c, r.e) - wantGap -- > 0: r is too far behind prev
+        if excess > 0.02 then
+          catchUp[r.i] = excess
+          holdBack[prev.i] = math.max(holdBack[prev.i] or 0, excess)
+        end
+      end
+      prev = r
+    end
+  end
+
   for rank, r in ipairs(running) do
     local err = rank - wantRank[r.i] -- > 0: too far back, < 0: too far forward
     if err ~= 0 then real.outOfPlace = real.outOfPlace + 1 end
     local strength = final and 2 or 1
     local base = r.e.baseLevel or 0.95
-    pcall(physics.setAILevel, r.i, math.clamp(base + 0.02 * strength * err, 0.6, 1.0))
+    local catch = catchUp[r.i] or 0
+    local hold = (catchUp[r.i] or 0) > 0.02 and 0 or (holdBack[r.i] or 0) -- (never hold a car that is itself behind)
+    local p = pace[r.i] or {}
+    pace[r.i] = p
+    p.level = math.clamp(base + 0.01 * strength * err + 0.6 * catch, 0.6, 1.0)
     -- Grip only ever goes up (for cars too far back): with less grip than it expects, AC's AI brakes too late and goes
-    -- off. Cars too far forward are held back by AI level and, late on, the throttle.
-    pcall(physics.setExtraAIGrip, r.i, math.clamp(1.2 + 0.015 * strength * err, 1.2, 1.32))
-    if final and err < 0 then
-      pcall(physics.setAIThrottleLimit, r.i, math.clamp(0.9 + 0.06 * err, 0.55, 0.9))
-    else
-      pcall(physics.setAIThrottleLimit, r.i, 1)
-    end
+    -- off. Cars too far forward are held back by AI level and the throttle.
+    p.grip = math.clamp(GRIP_BASE + 0.015 * strength * math.max(err, 0) + 1.0 * catch, GRIP_BASE, GRIP_BASE + 0.12)
+    p.throttle = 1
+    if hold > 0.02 then p.throttle = math.clamp(1 - 1.5 * (hold - 0.02), 0.7, 1) end
+    if final and err < 0 then p.throttle = math.min(p.throttle, math.clamp(0.9 + 0.06 * err, 0.55, 0.9)) end
     -- Cars out of place may pass through each other late in the race, but only where nobody sees it: never the car
     -- being filmed or its rival, and only more than 250 m from the camera.
     local hidden = r.i ~= watch.target and r.i ~= watch.partner
@@ -1423,6 +1460,110 @@ local function progressDelta(a, b) local d = (a - b) % 1; if d > 0.5 then d = d 
 
 local function trackLen() return field(ac.getSim(), 'trackLengthM') or 0 end
 local function hasSpline() return trackLen() > 100 end
+
+-- ------------------------------------------------------------------ Historic Roster AI: race-craft
+-- Assetto Corsa's own AI drives every car (no app can replace it: it follows the racing line, brakes and steers);
+-- this works on top of it every half second, in a watched race, for every AI car:
+--  * every car runs the same, slightly higher extra grip (GRIP_BASE): fewer spins and offs, nobody quicker;
+--  * danger points: where cars spin or lose most of their speed at once, twice, the track has a danger point. Cars
+--    coming up to one (from 200 m before to 50 m after) drive with more caution and less throttle, and a little
+--    more grip. What's learnt is kept per track and layout, so the next race there starts knowing it;
+--  * blue flags: a car about to be lapped (a car a lap or more ahead within 60 m behind it) moves aside, away from
+--    that car, and lifts a little until it's by;
+--  * wheel to wheel: two cars side by side are nudged apart, so they don't touch;
+--  * and the real-result steering's pace for each car (AI level, grip, throttle), applied together with all that.
+local hrai = { loaded = false, nbins = 1, danger = {}, seen = {}, last = {}, store = nil }
+local DANGER_BIN = 25  -- metres of track per danger counter
+local DANGER_COUNT = 2 -- incidents at one point that make it a danger point
+
+local function hraiLoad()
+  hrai.loaded = true
+  hrai.nbins = math.max(1, math.floor(trackLen() / DANGER_BIN))
+  local okT, track = try(ac, 'getTrackID')
+  local okL, layout = try(ac, 'getTrackLayout')
+  local ok, stored = try(ac, 'storage', 'hrai.danger.' .. tostring(okT and track or '') .. '.' .. tostring(okL and layout or ''), '')
+  if ok and stored then
+    hrai.store = stored
+    local okG, text = pcall(function() return stored:get() end)
+    for b, n in tostring(okG and text or ''):gmatch('(%d+):(%d+)') do hrai.danger[tonumber(b)] = tonumber(n) end
+  end
+end
+
+local function hraiSave()
+  if not hrai.store then return end
+  local parts = {}
+  for b, n in pairs(hrai.danger) do table.insert(parts, b .. ':' .. n) end
+  pcall(function() hrai.store:set(table.concat(parts, ',')) end)
+end
+
+-- A spin (turning fast at speed) or most of its speed lost in half a second, out on track: counted at that point.
+local function hraiIncident(i, c, now)
+  local speed = c.speedKmh or 0
+  local s = hrai.seen[i] or { speed = speed }
+  hrai.seen[i] = s
+  local yaw = c.localAngularVelocity and math.abs(c.localAngularVelocity.y) or 0
+  local spun = yaw > 1.4 and speed > 25
+  local lost = s.speed > 70 and speed < s.speed * 0.4
+  s.speed = speed
+  if (spun or lost) and now - (hrai.last[i] or -1e9) > 15 then
+    hrai.last[i] = now
+    local b = math.floor((c.splinePosition or 0) * hrai.nbins) % hrai.nbins
+    hrai.danger[b] = (hrai.danger[b] or 0) + 1
+    if hrai.danger[b] == DANGER_COUNT then
+      journal(string.format('danger point learnt at %.0f m (%s)', b * DANGER_BIN, spun and 'spins' or 'sudden stops'))
+      hraiSave()
+    end
+  end
+end
+
+local function dangerAhead(c)
+  local b = math.floor((c.splinePosition or 0) * hrai.nbins)
+  for k = -2, 8 do
+    if (hrai.danger[(b + k) % hrai.nbins] or 0) >= DANGER_COUNT then return true end
+  end
+  return false
+end
+
+local function hraiTick(now)
+  if not hasSpline() then return end
+  if not hrai.loaded then hraiLoad() end
+  local sim = ac.getSim()
+  local len = trackLen()
+  local racing = sim.isSessionStarted
+  local cars = {}
+  for i = 0, sim.carsCount - 1 do
+    local c = ac.getCar(i)
+    if c and isRaceCar(i) and field(c, 'isConnected') ~= false and c.isAIControlled and not field(c, 'isInPitlane')
+      and not (i == 0 and userDriving()) then
+      table.insert(cars, { i = i, c = c, run = (c.lapCount or 0) + (c.splinePosition or 0) })
+    end
+  end
+  for _, a in ipairs(cars) do
+    local i, c = a.i, a.c
+    if racing then hraiIncident(i, c, now) end
+    local p = pace[i] or {}
+    local throttle, grip, caution, offset = p.throttle or 1, p.grip or GRIP_BASE, 1, 0
+    if racing and dangerAhead(c) then caution, throttle, grip = 1.5, math.min(throttle, 0.85), grip + 0.04 end
+    local side = field(c, 'side')
+    for _, b in ipairs(cars) do
+      if racing and b.i ~= i and side and b.c.position and c.position then
+        local ahead = progressDelta(b.c.splinePosition or 0, c.splinePosition or 0) * len -- metres b is ahead of a
+        local lateral = b.c.position:clone():sub(c.position):dot(side)                   -- metres b is to a's side
+        if ahead < 0 and ahead > -60 and b.run - a.run > 0.5 then
+          offset = lateral > 0 and -0.6 or 0.6 -- (blue flag: away from the car lapping it)
+          throttle = math.min(throttle, 0.9)
+        elseif math.abs(ahead) < 6 and math.abs(lateral) < 2.4 then
+          offset = offset + (lateral > 0 and -0.25 or 0.25) -- (side by side: apart)
+        end
+      end
+    end
+    if p.level then pcall(physics.setAILevel, i, p.level) end
+    pcall(physics.setExtraAIGrip, i, grip)
+    pcall(physics.setAIThrottleLimit, i, throttle)
+    try(physics, 'setAICaution', i, caution)
+    try(physics, 'setAISplineOffset', i, math.clamp(offset, -0.8, 0.8), false)
+  end
+end
 
 -- Track shape, worked out once from the AI racing line: its middle, and whether it's an oval (it only ever turns
 -- one way).
@@ -2502,6 +2643,10 @@ function script.update(dt)
     end
     real.wasEnabled = real.enabled
   end
+
+  -- Race-craft for every AI car, with the steering's pace.
+  local okAi, errAi = pcall(hraiTick, clock())
+  if not okAi then real.status = 'Race-craft: ' .. tostring(errAi) end
 end
 
 -- Where the session is: "Race, lap 12 / 50", "Qualifying, 8:31 left" ... (sep: between the session and the rest)

@@ -58,10 +58,11 @@ public static class AdvancedIaPatch
                           "elseif a.player and a.valid and p.sanPlayerTrackLimits and not HR.watched() and not a.finished and not c.dq then"),
         ("src/engine.lua", "if K.recoverRetire and e.profile=='C' and cmd.recover",
                        "if K.recoverRetire and not HR.watched() and e.profile=='C' and cmd.recover"),
-        // Each car's pace (AI level, grip, throttle) belongs to the in-game app's real-result steering; AdvancedIA still
-        // drives (lines, overtaking, aggression) and enforces the rules (speed limits under yellow).
+        // The driving belongs to the in-game app (Historic Roster's own race-craft and real-result steering): each car's
+        // pace (AI level, grip, throttle), its line, caution and aggression, brake help and induced mistakes. AdvancedIA
+        // keeps the rules: flags, speed limits under yellow and full-course yellow, penalties.
         ("src/applier.lua", "local function write(name,index,value,extra)\r\n if name=='turnSignals' then",
-                            "local function write(name,index,value,extra)\r\n if HR.watched() and (name=='level' or name=='grip' or name=='throttle') then return true end\r\n if name=='turnSignals' then"),
+                            "local function write(name,index,value,extra)\r\n if HR.watched() and (name=='level' or name=='grip' or name=='throttle' or name=='offset' or name=='caution' or name=='aggression' or name=='brake' or name=='brakeMistake' or name=='tractionMistake') then return true end\r\n if name=='turnSignals' then"),
         // A stuck car isn't sent to its pit box (a lap lost): the in-game app puts it back on track, out of shot.
         ("src/engine.lua", "cmd.recover=not a.pit and (red and still>=K.redRecoverTime",
                            "cmd.recover=not HR.watched() and not a.pit and (red and still>=K.redRecoverTime"),
@@ -81,6 +82,13 @@ public static class AdvancedIaPatch
                             " if HR.watched() or frame.online or frame.replay or frame.paused or a.deltaFailed or not ac.AudioEvent or not callable(ac.dirname) then return end"),
     };
 
+    // Edits an earlier version of the program applied, and what replaces them now.
+    private static readonly (string File, string Was, string Now)[] Upgrades =
+    {
+        ("src/applier.lua", " if HR.watched() and (name=='level' or name=='grip' or name=='throttle') then return true end",
+                            " if HR.watched() and (name=='level' or name=='grip' or name=='throttle' or name=='offset' or name=='caution' or name=='aggression' or name=='brake' or name=='brakeMistake' or name=='tractionMistake') then return true end"),
+    };
+
     public static string Folder(string acRoot) => Path.Combine(acRoot, "apps", "lua", "AdvancedIA");
 
     /// <summary>Patches AdvancedIA when it's installed. Returns what was done, or null when there was nothing to do.</summary>
@@ -96,7 +104,14 @@ public static class AdvancedIaPatch
         {
             var path = Path.Combine(src, edit.File);
             if (!File.Exists(path)) return $"AdvancedIA not patched: {edit.File} is missing (a version this program doesn't know).";
-            if (!texts.TryGetValue(edit.File, out var text)) texts[edit.File] = text = File.ReadAllText(path);
+            if (!texts.TryGetValue(edit.File, out var text))
+            {
+                text = File.ReadAllText(path);
+                // A file an earlier version patched: bring its edits up to date first.
+                foreach (var up in Upgrades.Where(u => u.File == edit.File))
+                    if (Match(text, up.Was) is { } was && !text.Contains(up.Now)) text = text.Replace(was, up.Now);
+                texts[edit.File] = text;
+            }
             var old = Match(text, edit.Old);
             if (old == null && Match(text, edit.New) != null) continue; // already applied
             if (old == null || Count(text, old) != 1)
@@ -106,14 +121,15 @@ public static class AdvancedIaPatch
         var helper = Path.Combine(src, "src", "historicroster.lua");
         var helperCurrent = File.Exists(helper) && File.ReadAllText(helper) == HelperLua;
         var requireMissing = texts.Keys.Where(f => !texts[f].Contains("require('src/historicroster')")).ToList();
-        if (pending.Count == 0 && helperCurrent && requireMissing.Count == 0) return null;
+        var upgraded = texts.Any(kv => kv.Value != File.ReadAllText(Path.Combine(src, kv.Key)));
+        if (pending.Count == 0 && helperCurrent && requireMissing.Count == 0 && !upgraded) return null;
 
         if (!helperCurrent) File.WriteAllText(helper, HelperLua);
         foreach (var file in texts.Keys)
         {
             var path = Path.Combine(src, file);
             var text = texts[file];
-            var original = text;
+            var original = File.ReadAllText(path); // (as on disk: an upgrade alone is a change too)
             var nl = text.Contains("\r\n") ? "\r\n" : "\n";
             if (!text.Contains("require('src/historicroster')")) text = Require + nl + text;
             foreach (var edit in pending.Where(e => e.File == file))
