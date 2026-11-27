@@ -1183,6 +1183,21 @@ local function tyreNote(c)
   return string.format(', tyres: wear %.2f, dirt %.2f, %.0f km', wear, dirt, km)
 end
 
+-- Tyres changed as the real cars' were: AC's AI rarely stops for tyres, so the field ran the whole race on one set
+-- and went off at every corner in the last laps (seen in the journal: wear climbs steadily, 0.04 every 5 minutes, to
+-- about 0.7 by the flag). Past 0.25 a car's tyres are made new again (their driven distance set back to nothing, which
+-- doesn't spoil the lap).
+local TYRE_WEAR_MAX = 0.25
+local function freshTyres(i, c)
+  local wear = 0
+  for w = 0, 3 do
+    local wh = c.wheels and c.wheels[w]
+    if wh then wear = math.max(wear, field(wh, 'tyreWear') or 0) end
+  end
+  if wear > TYRE_WEAR_MAX and try(physics, 'setTyresVirtualKM', i, nil, 0) then return wear end
+  return nil
+end
+
 local function carLabel(i)
   local c = ac.getCar(i)
   return string.format('%s [car %d, P%d, lap %d, at %.3f]', ac.getDriverName(i) or '?', i, c and c.racePosition or 0,
@@ -1428,6 +1443,9 @@ local function steerToRealResult(step)
         -- engine is kept as new. (A car moved at speed can over-rev in the gear it was in.)
         local life = field(c, 'engineLifeLeft')
         if life and life < 1000 then pcall(physics.setCarEngineLife, i, 1000) end
+        local worn = freshTyres(i, c)
+        if worn then e.tyreSets = (e.tyreSets or 0) + 1 end
+        if worn and e.tyreSets <= 3 then journal(string.format('new tyres for %s (wear was %.2f)', carLabel(i), worn)) end
       elseif e.steered and not e.pitting then
         -- Finished (or you took over your seat): back to its normal pace and collisions.
         releaseCar(i, e)
