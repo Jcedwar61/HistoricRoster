@@ -1192,12 +1192,19 @@ local GRIP_BASE = 1.25
 local function lapsRun(c, e)
   local s = c.splinePosition or 0
   if (c.lapCount or 0) > 0 or s < 0.5 then e.crossed = true end
-  return (c.lapCount or 0) + (e.crossed and s or 0)
+  local run = (c.lapCount or 0) + (e.crossed and s or 0)
+  -- At the line the track position wraps a moment before (or after) the lap count goes up: never a jump of a lap.
+  local last = e.lastRun
+  if last and last - run > 0.9 and s < 0.05 then run = run + 1
+  elseif last and run - last > 0.9 and s > 0.95 then run = run - 1 end
+  e.lastRun = run
+  return run
 end
 
 -- A car stuck on track after a spin or a tangle loses laps that no steering gives back (AC ranks by completed laps,
 -- and nothing can set them). So after 8 s standing still on track, or 12 s getting nowhere (beached in the gravel,
--- going round in circles, reversing: less than 40 m along the track), it's put back on the racing line where it was, at
+-- going round in circles, reversing: less than 40 m along the track; not in the first minute, when the back of the
+-- grid queues for the first corner), it's put back on the racing line where it was, at
 -- a spot with no car within 25 m. Only where nobody sees it: never the car being filmed or its rival, and more than
 -- 250 m from the camera at both ends. Only once it has been racing (a race session counts as started while the grid
 -- still waits for the lights), and never across the finish line (the lap it was on wouldn't count).
@@ -1234,7 +1241,7 @@ local function rescueStuck(i, c, step)
   local len = math.max(field(sim, 'trackLengthM') or 5000, 500)
   local run = (c.lapCount or 0) + (c.splinePosition or 0)
   if not s.mark or run - s.mark > 40 / len then s.mark, s.markAt = run, clock() end
-  local nowhere = clock() - s.markAt > 12
+  local nowhere = clock() - s.markAt > 12 and clock() - s.startAt > 60
   if (c.speedKmh or 0) >= 5 and not nowhere then s.still = 0 return false end
   s.still = s.still + step
   if (s.still < 8 and not nowhere) or not hiddenFromCamera(i, c.position) then return false end
@@ -2505,7 +2512,8 @@ end
 -- ------------------------------------------------------------------ Historic Roster's own Safety Car
 -- When the program put a Safety Car on the grid (it waits in its pit box), it comes out as on TV, in any Historic
 -- Roster race (driven or watched), from 3 % to 90 % of the race distance and not within 4 minutes of the last one:
---  * when a car has been standing still on the track for 6 s, or two cars are stopped at once;
+--  * when a car has been standing still on the track for 15 s (one out of shot is put back after 8 s, so that's a
+--    car that couldn't be), or two cars have been stopped for 8 s at once;
 --  * it's put on the racing line 250 m ahead of the leader (where the camera doesn't see it arrive), and runs at
 --    SC_KMH; every car's top speed is held to the car ahead's (so nobody overtakes), cars further back can close up;
 --  * once nothing is stopped on the track and the leader has done 2 laps behind it: "Safety Car in this lap"; it
@@ -2562,10 +2570,8 @@ local function runSafetyCar(dt)
     local e = real.cars[i]
     if c and isRaceCar(i) and not (e and (e.pitting or e.retired)) and not field(c, 'isInPitlane') and not field(c, 'isRaceFinished') then
       scm.stopped[i] = (c.speedKmh or 0) < 5 and (scm.stopped[i] or 0) + step or 0
-      if scm.stopped[i] > 6 then
-        anywhere = anywhere + 1
-        if (field(c, 'wheelsOutside') or 0) < 3 then onTrack = onTrack + 1 end
-      end
+      if scm.stopped[i] > 8 then anywhere = anywhere + 1 end
+      if scm.stopped[i] > 15 and (field(c, 'wheelsOutside') or 0) < 3 then onTrack = onTrack + 1 end
       table.insert(order, { i = i, c = c, run = (c.lapCount or 0) + (c.splinePosition or 0) })
     else
       scm.stopped[i] = 0
