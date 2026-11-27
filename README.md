@@ -96,7 +96,15 @@ installed and that have real cars or stand-ins. Each race shows how many of its 
     car a team-mate drives in this race if you have it, else the installed car closest in year (so
     the field runs at one pace: a 2017 car is no stand-in for a 1982 one), preferring the same make
     or team within about a decade, with that driver's livery when the car has one. Team-mates share a
-    stand-in. The real car stays in the missing list with its download link.
+    stand-in. The real car stays in the missing list with its download link. Classes recognised: F1,
+    Formula, IndyCar (CART, Champ Car, IRL), NASCAR, Supercars, DTM, Group C / GTP, Sportscar
+    (1950s-80s prototypes and GTs), LMP1, LMP2, Hypercar, GT1, GTE, GT3 and GT4; Kunos cars count with
+    the season they raced.
+  - *Cars and tracks in another Assetto Corsa install* on this PC (a second Steam library, an old
+    copy) count as installed: each one your main install doesn't have is linked into its `content`
+    folder (a junction: nothing is copied, removing it leaves the other install untouched). New ones
+    are picked up automatically whenever the program, RosterTool or the server plugin reads your
+    cars and tracks, so a car you add to the other install is in the next race without a restart.
 - **Starting grid:** every car with its livery picture, number, driver, team, the real car and its
   AC folder, the livery folder, the driver's real result and AI level. Your car is highlighted;
   stand-ins are marked. Real cars with no possible stand-in are listed at the bottom as left out.
