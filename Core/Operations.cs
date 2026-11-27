@@ -279,7 +279,8 @@ public static class LibraryScanner
         var rules = new List<CarRule>();
         var stock = new List<(CarInfo Car, string Make, string Variant)>();
         var skipped = 0;
-        foreach (var car in lib.Cars.Where(c => c.Category is "F1" or "NASCAR" or "GT1" or "GT3" or "GTE" or "LMP1" or "LMP2" or "Hypercar" or "Supercars"))
+        foreach (var car in lib.Cars.Where(c => c.Category is "F1" or "NASCAR" or "GT1" or "GT3" or "GTE" or "LMP1" or "LMP2" or "Hypercar" or "Supercars"
+                                             or "IndyCar" or "DTM" or "Group C" or "Sportscar" or "GT4"))
         {
             if (car.Year == null) { skipped++; continue; }
             var note = $"Installed: {car.Name} (from scan)";

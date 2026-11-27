@@ -74,7 +74,7 @@ public class ContentLibrary
             var brand = Str(ui, "brand");
             var tags = StrArray(ui, "tags");
             // Kunos cars often have no year, but their description names the season ("the 2015 Formula One season").
-            var year = Int(ui, "year") ?? YearFromText(name) ?? YearFromText(folder) ?? YearFromText(Str(ui, "description") ?? "");
+            var year = Int(ui, "year") ?? KunosYear(folder) ?? YearFromText(name) ?? YearFromText(folder) ?? YearFromText(Str(ui, "description") ?? "");
             var category = Classify(name, brand, tags, Str(ui, "class"), year, folder);
 
             var skins = new List<SkinInfo>();
@@ -156,6 +156,31 @@ public class ContentLibrary
 
     // ------------------------------------------------------------------ classification
 
+    /// <summary>
+    /// The season of official Kunos race cars, whose ui_car.json has no year (the stand-in picker matches eras by year).
+    /// The year each car raced in that exact spec, as in the content catalog.
+    /// </summary>
+    private static readonly Dictionary<string, int> KunosYears = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ks_maserati_250f_6cyl"] = 1957, ["ks_maserati_250f_12cyl"] = 1957, ["ks_lotus_25"] = 1963, ["ks_ferrari_312_67"] = 1967,
+        ["ks_lotus_72d"] = 1972, ["ferrari_312t"] = 1975, ["lotus_98t"] = 1986, ["ks_ferrari_f2004"] = 2004, ["ks_ferrari_f138"] = 2013,
+        ["ks_ferrari_sf15t"] = 2015, ["ks_ferrari_sf70h"] = 2017,
+        ["ks_ferrari_250_gto"] = 1962, ["ks_ford_gt40"] = 1966, ["ks_ferrari_330_p4"] = 1967, ["ks_porsche_908_lh"] = 1969,
+        ["ks_porsche_917_k"] = 1970, ["ks_porsche_917_30"] = 1973, ["ks_porsche_935_78_moby_dick"] = 1978,
+        ["ks_porsche_962c_longtail"] = 1987, ["ks_porsche_962c_shorttail"] = 1987, ["ks_mercedes_c9"] = 1989, ["ks_mazda_787b"] = 1991,
+        ["ks_mclaren_f1_gtr"] = 1996, ["ks_porsche_911_gt1"] = 1998, ["ks_maserati_mc12_gt1"] = 2005,
+        ["ks_audi_r18_etron_quattro"] = 2014, ["ks_toyota_ts040"] = 2014, ["ks_porsche_919_hybrid_2015"] = 2015, ["ks_porsche_919_hybrid_2016"] = 2016,
+        ["bmw_m3_gt2"] = 2010, ["ferrari_458_gt2"] = 2012, ["ks_corvette_c7r"] = 2016, ["ks_porsche_911_rsr_2017"] = 2017,
+        ["ks_porsche_911_carrera_rsr"] = 1973,
+        ["bmw_z4_gt3"] = 2011, ["mercedes_sls_gt3"] = 2012, ["mclaren_mp412c_gt3"] = 2012, ["ks_audi_r8_lms"] = 2013,
+        ["ks_audi_r8_lms_2016"] = 2016, ["ks_nissan_gtr_gt3"] = 2015, ["ks_mclaren_650_gt3"] = 2015, ["ks_lamborghini_huracan_gt3"] = 2015,
+        ["ks_ferrari_488_gt3"] = 2016, ["ks_mercedes_amg_gt3"] = 2016, ["ks_porsche_911_gt3_r_2016"] = 2016,
+        ["ks_porsche_cayman_gt4_clubsport"] = 2016, ["ks_maserati_gt_mc_gt4"] = 2016, ["ks_bmw_m235i_racing"] = 2014, ["lotus_2_eleven_gt4"] = 2011,
+        ["ks_glickenhaus_scg003"] = 2017, ["p4-5_2011"] = 2011, ["ks_praga_r1"] = 2016,
+    };
+
+    public static int? KunosYear(string folder) => KunosYears.TryGetValue(folder, out var y) ? y : null;
+
     /// <summary>Works out the racing category of a car from its name, brand, tags and class.</summary>
     public static string? Classify(string name, string? brand, IReadOnlyList<string> tags, string? cls, int? year, string folder = "")
     {
@@ -170,19 +195,32 @@ public class ContentLibrary
         if (street) return null; // road cars, including road "hypercars"
         // Australian touring cars (V8 Supercars / ATCC / Supercars Championship).
         if (Has(@"\bv8 ?supercars?\b|\bsupercars\b|\batcc\b|\bvasc\b|#v8sc")) return "Supercars";
+        // American open-wheel: IndyCar / CART / Champ Car / IRL ("Indy 1998 Reynard", "cart_1998_lola", "sr_champcart_07").
+        if (Has(@"\bindy ?car\b|\bindy (19|20)\d\d\b|\bcart\b|champ ?car|\birl\b|indy ?500|\bdw12\b|\bir-?\d\d\b")) return "IndyCar";
+        // DTM / ITC (any era: Group A, Class 1, the 2000s saloons and the 2012-2018 coupes).
+        if (Has(@"\bdtm\b|\bitc\b|class ?1 touring")) return "DTM";
+        // Group C and IMSA GTP (Kunos tags them "#Proto C"); modern "GTP" cars are Hypercars (checked below by year).
+        if (Has(@"proto(type)? ?c\b|group ?c\b|\bgr\.? ?c\b|\bgtp\b") && (year == null || year < 1995)) return "Group C";
         // F1 car packs named after the season ("Grand Prix 1998 F300", "GrandPrix 1950-60s").
         if (Has(@"\bgrand ?prix ?(19[5-9]\d|20[0-3]\d)\b|\bgrandprix ?19[5-9]0")) return "F1";
         if (Has(@"\bgt1\b|lmgt1|\bf1 gtr\b|\bgt-?1\b|clk[- ]?gtr|clk[- ]?lm|\bmc12\b|911 gt1")) return "GT1";
         if (Has(@"\blmp2\b|\blmp3\b")) return "LMP2";
-        if (Has(@"\blmh\b|\blmdh\b|\bgtp\b|le mans hypercar")) return "Hypercar";
+        // "lmh_" is also the folder prefix of the 1960s-70s "Le Mans Hero" pack: Hypercars are 2018 on.
+        if (Has(@"\blmh\b|\blmdh\b|\bgtp\b|le mans hypercar") && (year == null || year >= 2018)) return "Hypercar";
         if (Has(@"\blmp1\b|lmp900|919 hybrid|\br18\b|\bts0[45]0\b|audi r10|peugeot 908|\blmp\b") && (year == null || year >= 1995)) return "LMP1";
         // Kunos tags both GT3 and GTE cars "#GTE-GT3": decide by the name first.
         if (NameHas(@"\bgt3\b") && !NameHas(@"gt3 ?rs\b|gt3 cup|\bcup\b")) return "GT3";
         if (NameHas(@"\bgte\b|lmgte|\bgt2\b|\bgtlm\b|\brsr\b|\bc7\.?r\b|\bc6\.?r\b")) return "GTE";
         if (Has(@"\bgt3\b") && !Has(@"gt3 ?rs\b|gt3 cup")) return "GT3";
         if (Has(@"\bgte\b|lmgte|\bgtlm\b")) return "GTE";
+        if (Has(@"\bgt4\b")) return "GT4";
+        // Sports prototypes and GT cars of the 1950s-80s (Le Mans, Sebring, Targa Florio, Can-Am, IMSA GTO/GTU/GTX).
+        if ((Has(@"vintage gt\b|vintage can ?am|sports ?prototype|\bsportscar|\bsports car\b") || NameHas(@"330 p4|250 gto|\bgt40\b|\b917\b|\b908\b|\b935\b"))
+            && (year == null || year < 1990)) return "Sportscar";
         if (Has(@"\bf1\b|formula ?1\b|formula one|\bf20\d\d\b|\bsf\d\d-?[th]\b|\bmp4[-/ ]?\d{1,2}\b|\bfw\d\d\b")
             && !Has(@"mclaren f1\b(?! ?\d)|\bf1 road\b")) return "F1";
+        // Kunos grand prix cars are tagged "gp" + "singleseater" without saying F1 (Lotus 25/72D, 312T, 98T, 250F).
+        if (tags.Any(t => t.Equals("gp", StringComparison.OrdinalIgnoreCase)) && Has(@"single ?seater")) return "F1";
         if (Has(@"open ?wheel|formula") && year is >= 1950) return "Formula";
         return null;
     }
