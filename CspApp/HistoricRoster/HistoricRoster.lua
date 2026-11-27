@@ -2711,8 +2711,29 @@ local function placeGrid(dt)
   journal(string.format('grid: %d cars placed %d m apart (the track\'s slots were %.1f m)', #cars, GRID_SLOT, spacing))
 end
 
+-- A watched race has nobody to press Start in the pits menu: it's pressed 5 s after loading (the grid is laid out by
+-- then), and again every 3 s until the race is under way.
+local autoStart = { at = nil, tries = 0 }
+local function startWatchedRace()
+  local sim = ac.getSim()
+  if sim.isOnlineRace or sim.isReplayActive or sim.isSessionStarted or not field(sim, 'isInMainMenu')
+    or not readWatchFlag() then
+    autoStart.at = nil
+    return
+  end
+  autoStart.at = autoStart.at or clock() + 2
+  if clock() - autoStart.at < 3 then return end
+  autoStart.at = clock()
+  autoStart.tries = autoStart.tries + 1
+  local ok, started = try(ac, 'tryToStart')
+  if autoStart.tries == 1 or (ok and started) then
+    journal(ok and started and 'Start pressed: the race is under way' or 'Start pressed, not taken yet: trying again every 3 s')
+  end
+end
+
 function script.update(dt)
   -- Every offline session, watched or not.
+  pcall(startWatchedRace)
   pcall(guardSafetyCar, dt)
   pcall(placeGrid, dt)
   pcall(runSafetyCar, dt)
@@ -2846,6 +2867,19 @@ function script.update(dt)
   -- Race-craft for every AI car, with the steering's pace.
   local okAi, errAi = pcall(hraiTick, clock())
   if not okAi then real.status = 'Race-craft: ' .. tostring(errAi) end
+
+  -- In the journal too: each new error once, and while no running order is written, where the race stands each minute.
+  if real.status and real.status ~= real.journalled then journal('error: ' .. real.status) end
+  real.journalled = real.status
+  if clock() - (real.stateAt or -1e9) > 60 then
+    real.stateAt = clock()
+    local sim = ac.getSim()
+    if clock() - (real.snapshotAt or -1e9) > 60 then
+      journal(string.format('state: %s session, started %s, real result %s (on: %s, %d cars), Safety Car %s',
+        tostring(sessionKind()), tostring(sim.isSessionStarted), tostring(real.available), tostring(real.enabled),
+        (function() local n = 0 for _ in pairs(real.cars) do n = n + 1 end return n end)(), scm.phase))
+    end
+  end
 end
 
 -- Where the session is: "Race, lap 12 / 50", "Qualifying, 8:31 left" ... (sep: between the session and the rest)
