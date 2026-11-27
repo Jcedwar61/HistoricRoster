@@ -172,6 +172,9 @@ public partial class MainWindow : Window
         if (_ws.LinkedTracks.Count > 0)
             Log($"Linked {_ws.LinkedTracks.Count} track(s) from another Assetto Corsa install into {_ws.ContentFolder}\\tracks " +
                 $"(nothing copied): {string.Join(", ", _ws.LinkedTracks)}.");
+        if (_ws.LinkedCars.Count > 0)
+            Log($"Linked {_ws.LinkedCars.Count} car(s) from another Assetto Corsa install into {_ws.ContentFolder}\\cars " +
+                $"(nothing copied): {string.Join(", ", _ws.LinkedCars)}.");
         _resolver = _ws.CreateResolver();
         _apps = CompanionApps.Detect(_ws.AcRoot);
         var lib = await Task.Run(() => _ws.Library);

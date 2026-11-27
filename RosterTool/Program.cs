@@ -47,6 +47,8 @@ Workspace Ws()
     var ws = Workspace.Open(cli.Get("content"), rosters, Path.Combine(toolDir, "rosters"));
     if (ws.LinkedTracks.Count > 0)
         Console.WriteLine($"Linked {ws.LinkedTracks.Count} track(s) from another Assetto Corsa install (nothing copied): {string.Join(", ", ws.LinkedTracks)}.");
+    if (ws.LinkedCars.Count > 0)
+        Console.WriteLine($"Linked {ws.LinkedCars.Count} car(s) from another Assetto Corsa install (nothing copied): {string.Join(", ", ws.LinkedCars)}.");
     return ws;
 }
 
@@ -120,7 +122,12 @@ int Find()
     Console.WriteLine($"Historic Roster in-game app: {(apps.HistoricRosterApp ? "installed" : "no")}   " +
                       $"Safety Car {apps.SafetyCarModel}: {(apps.SafetyCarInstalled ? "installed" : "not installed")}");
     foreach (var g in lib.Cars.Where(x => x.Category != null).GroupBy(x => x.Category!).OrderBy(g => g.Key))
+    {
         Console.WriteLine($"  {g.Key,-9} {g.Count(),3} cars: {string.Join(", ", g.Take(6).Select(x => x.Folder))}{(g.Count() > 6 ? ", ..." : "")}");
+        if (cli.Has("all"))
+            foreach (var c in g.OrderBy(c => c.Year ?? 0))
+                Console.WriteLine($"      {c.Year?.ToString() ?? "----"}  {c.Folder}  ({c.Name}, {c.Skins.Count} liveries)");
+    }
     return 0;
 }
 

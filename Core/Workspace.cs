@@ -51,13 +51,17 @@ public class Workspace
         var content = contentFolder ?? AcInstallLocator.FindContentFolder();
         if (content == null || !Directory.Exists(Path.Combine(content, "cars")))
             throw new InvalidOperationException("Assetto Corsa not found. Set its content folder (…\\assettocorsa\\content).");
-        // Tracks in another AC install on this PC count as installed (linked in, nothing copied).
+        // Tracks and cars in another AC install on this PC count as installed (linked in, nothing copied).
         var linked = TrackLinks.LinkFromOtherInstalls(content);
-        return new Workspace(content, rostersFolder, bundledRosters) { LinkedTracks = linked };
+        var linkedCars = TrackLinks.LinkCarsFromOtherInstalls(content);
+        return new Workspace(content, rostersFolder, bundledRosters) { LinkedTracks = linked, LinkedCars = linkedCars };
     }
 
     /// <summary>Track folders linked in from another Assetto Corsa install when this workspace was opened.</summary>
     public IReadOnlyList<string> LinkedTracks { get; private init; } = Array.Empty<string>();
+
+    /// <summary>Car folders linked in from another Assetto Corsa install when this workspace was opened.</summary>
+    public IReadOnlyList<string> LinkedCars { get; private init; } = Array.Empty<string>();
 
     public ContentResolver CreateResolver() => new(new ResolverOptions { ContentFolder = ContentFolder, CatalogFolder = RostersFolder });
 
