@@ -169,6 +169,9 @@ public partial class MainWindow : Window
             _ws = Workspace.Open(_settings.ContentFolder, RostersFolder, Path.Combine(AppContext.BaseDirectory, "rosters"));
         }
 
+        if (_ws.LinkedTracks.Count > 0)
+            Log($"Linked {_ws.LinkedTracks.Count} track(s) from another Assetto Corsa install into {_ws.ContentFolder}\\tracks " +
+                $"(nothing copied): {string.Join(", ", _ws.LinkedTracks)}.");
         _resolver = _ws.CreateResolver();
         _apps = CompanionApps.Detect(_ws.AcRoot);
         var lib = await Task.Run(() => _ws.Library);

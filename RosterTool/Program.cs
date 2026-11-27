@@ -44,7 +44,10 @@ Workspace Ws()
 {
     var rosters = cli.Get("rosters")
                   ?? (cli.Get("server") is { } server ? Path.Combine(server, "rosters") : Path.Combine(toolDir, "rosters"));
-    return Workspace.Open(cli.Get("content"), rosters, Path.Combine(toolDir, "rosters"));
+    var ws = Workspace.Open(cli.Get("content"), rosters, Path.Combine(toolDir, "rosters"));
+    if (ws.LinkedTracks.Count > 0)
+        Console.WriteLine($"Linked {ws.LinkedTracks.Count} track(s) from another Assetto Corsa install (nothing copied): {string.Join(", ", ws.LinkedTracks)}.");
+    return ws;
 }
 
 Roster FindRoster(Workspace ws, string idOrFile)
