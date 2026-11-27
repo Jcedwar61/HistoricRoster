@@ -2537,13 +2537,14 @@ end
 -- Roster race (driven or watched), from 3 % to 90 % of the race distance and not within 4 minutes of the last one:
 --  * when a car has been standing still on the track for 15 s (one out of shot is put back after 8 s, so that's a
 --    car that couldn't be), or two cars have been stopped for 8 s at once;
---  * it's put on the racing line 250 m ahead of the leader (where the camera doesn't see it arrive), and runs at
+--  * from the moment it's deployed every car is held to VSC_KMH; it's put on the racing line 800 m ahead of the
+--    leader (where the camera doesn't see it arrive), and once it's moving it runs at
 --    SC_KMH; every car's top speed is held to the car ahead's (so nobody overtakes), cars further back can close up;
 --  * once nothing is stopped on the track and the leader has done 2 laps behind it: "Safety Car in this lap"; it
 --    heads for the pits, and when the leader crosses the line the race is green again;
 --  * meanwhile the real-result steering and the race-craft's danger points and blue flags stand back;
---  * if the Safety Car hasn't got going 15 s after it's put on the track, it goes back to its pit box and the period
---    runs as a virtual Safety Car instead: every car held to VSC_KMH where it is, nobody placed anywhere.
+--  * if the Safety Car hasn't got going 10 s after it's put on the track (or the leader is already on it), it goes
+--    back to its pit box and the period runs as a virtual Safety Car instead: every car held to VSC_KMH where it is.
 local SC_KMH = 130
 local VSC_KMH = 160
 
@@ -2608,6 +2609,7 @@ local function runSafetyCar(dt)
   if scm.phase == 'idle' then
     if sc and progress > 0.03 and progress < 0.9 and now - scm.lastEnd > 240 and (onTrack >= 1 or anywhere >= 2) then
       scm.phase, scm.car, scm.since, scm.laps, scm.leaderLap, scm.placeTries = 'out', scIndex, now, 0, leader.lapCount or 0, 0
+      scm.going, scm.virtual = false, false
       scMessage('SAFETY CAR', 'Safety Car deployed: no overtaking.')
     end
     return
@@ -2616,7 +2618,7 @@ local function runSafetyCar(dt)
   if scm.phase == 'out' then
     -- Onto the racing line ahead of the leader, where the camera doesn't see it arrive (after 10 s, anywhere clear).
     scm.placeTries = scm.placeTries + 1
-    local ok, pos = try(ac, 'trackProgressToWorldCoordinate', ((leader.splinePosition or 0) + 250 / len) % 1)
+    local ok, pos = try(ac, 'trackProgressToWorldCoordinate', ((leader.splinePosition or 0) + 800 / len) % 1)
     if ok and pos and (hiddenFromCamera(scIndex, pos) or scm.placeTries > 20) and clearOf(pos, scIndex) then
       safetyGuard.held[scIndex], safetyGuard.parked[scIndex] = nil, nil
       try(physics, 'setAINoInput', scIndex, false)
@@ -2629,7 +2631,8 @@ local function runSafetyCar(dt)
   if sc and not scm.virtual and scm.phase ~= 'green' then try(physics, 'preventAIFromRetiring', scIndex) end
   if scm.phase == 'lead' and not scm.virtual and sc then
     if (sc.speedKmh or 0) > 30 then scm.going = true end
-    if not scm.going and now - (scm.placedAt or now) > 15 then
+    local leaderOnIt = progressDelta(sc.splinePosition or 0, leader.splinePosition or 0) * len < 150
+    if not scm.going and (now - (scm.placedAt or now) > 10 or leaderOnIt) then
       -- It isn't moving: back to its pit box (the guard parks it once it isn't ours), and a virtual Safety Car.
       scm.virtual, scm.car = true, nil
       try(physics, 'setAITopSpeed', scIndex, 1e9)
@@ -2646,10 +2649,12 @@ local function runSafetyCar(dt)
 
   -- The field behind it, in running order: no overtaking (each car held to the car ahead's speed), closing up.
   table.sort(order, function(a, b) return a.run > b.run end)
-  if scm.virtual then
+  -- (Until it's moving, and as a virtual Safety Car: every car held to VSC_KMH where it is.)
+  local queue = scm.going and not scm.virtual
+  if not queue then
     for _, r in ipairs(order) do try(physics, 'setAITopSpeed', r.i, VSC_KMH) end
   end
-  for k, r in ipairs(scm.virtual and {} or order) do
+  for k, r in ipairs(queue and order or {}) do
     local cap = SC_KMH + 70
     if k == 1 then
       local toSc = sc and scm.phase ~= 'out' and progressDelta(sc.splinePosition or 0, r.c.splinePosition or 0) * len

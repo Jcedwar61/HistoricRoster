@@ -94,8 +94,8 @@ public static class RealConditions
         if (r.Track == null || !DateOnly.TryParse(r.Date, CultureInfo.InvariantCulture, out var date)) return null;
         if (date.Year < 1940 || date > DateOnly.FromDateTime(DateTime.UtcNow)) return null;
         var pos0 = position ?? (r.Track.Latitude != null && r.Track.Longitude != null ? (r.Track.Latitude.Value, r.Track.Longitude.Value) : null);
-        // v2: earlier lookups (no start times, no positions) are not reused.
-        var key = $"v3|{r.Track.Name}|{r.Date}|{r.Time}|{r.UsualLocalTime}|{(pos0 is { } p0 ? $"{p0.Item1:0.00},{p0.Item2:0.00}" : r.Track.Locality)}";
+        // v4: earlier lookups (no start times or positions; rain from the wettest hour) are not reused.
+        var key = $"v4|{r.Track.Name}|{r.Date}|{r.Time}|{r.UsualLocalTime}|{(pos0 is { } p0 ? $"{p0.Item1:0.00},{p0.Item2:0.00}" : r.Track.Locality)}";
 
         await Lock.WaitAsync(ct);
         try
@@ -205,9 +205,15 @@ public static class RealConditions
         var h = Math.Clamp((int)Math.Floor((startUtc.AddSeconds(apiOffset) - date.ToDateTime(TimeOnly.MinValue)).TotalHours), 0, temp.Length - 1);
 
         double Avg(double[] a, int from, int n) => a.Length == 0 ? 0 : a.Skip(from).Take(n).Where(x => !double.IsNaN(x)).DefaultIfEmpty(0).Average();
-        double Max(double[] a, int from, int n) => a.Length == 0 ? 0 : a.Skip(from).Take(n).Where(x => !double.IsNaN(x)).DefaultIfEmpty(0).Max();
+        // The middle of the window's hours: one passing shower in the archive's grid cell (it's ~30 km across) doesn't
+        // make a wet race; rain in two hours of three does.
+        double Median(double[] a, int from, int n)
+        {
+            var v = a.Skip(from).Take(n).Where(x => !double.IsNaN(x)).OrderBy(x => x).ToArray();
+            return v.Length == 0 ? 0 : v[v.Length / 2];
+        }
         // The race window: the start hour and the two after it.
-        return new Conditions(start, known, Math.Round(double.IsNaN(temp[h]) ? Avg(temp, h, 3) : temp[h], 1), Max(rain, h, 3), Avg(cloud, h, 3),
+        return new Conditions(start, known, Math.Round(double.IsNaN(temp[h]) ? Avg(temp, h, 3) : temp[h], 1), Median(rain, h, 3), Avg(cloud, h, 3),
             date, lat, lon, offset, tz, usual != null);
     }
     /// <summary>
