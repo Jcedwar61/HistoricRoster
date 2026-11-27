@@ -1222,8 +1222,7 @@ end
 -- A car that can't get going after a tangle is usually broken (suspension, gearbox): repaired as it's put back, out of
 -- shot. A real finisher wasn't crippled, and a car that really retired goes to the pits as in real life anyway.
 local function repairCar(i, c)
-  try(physics, 'setSuspensionDamage', i, nil, 0)
-  if vec4 then try(physics, 'setCarBodyDamage', i, vec4(0, 0, 0, 0)) end
+  try(physics, 'setSuspensionDamage', i, nil, 0) -- (doesn't spoil the lap; repairing the body would)
   local gearbox = field(c, 'gearboxDamage')
   if gearbox and gearbox > 0.2 then
     local fuel, maxFuel = field(c, 'fuel'), field(c, 'maxFuel')
@@ -1268,12 +1267,17 @@ local function rescueStuck(i, c, step)
       end
       if clear then
         journal(string.format('put back on track after %s: %s, %d m on', why, carLabel(i), k * 10))
-        if try(physics, 'setCarPosition', i, pos, nil) then
-          try(physics, 'setCarVelocity', i, vec3(0, 0, 0))
-          repairCar(i, c)
+        -- AC doesn't count the lap of a car moved with setCarPosition in the middle or last part of the lap (seen in
+        -- the journal: moved at 0.2, counted; at 0.39 or 0.8, not). The AI's own move is tried first.
+        local how = 'setAICarPosition'
+        if not try(physics, 'setAICarPosition', i, pos, nil) then
+          how = 'setCarPosition'
+          if try(physics, 'setCarPosition', i, pos, nil) then try(physics, 'setCarVelocity', i, vec3(0, 0, 0)) end
         end
+        repairCar(i, c)
         movedAt[i] = clock()
-        moveCheck[i] = { lap = c.lapCount or 0, s = c.splinePosition or 0 }
+        moveCheck[i] = { lap = c.lapCount or 0, s = c.splinePosition or 0, how = how, sector = field(c, 'currentSector') or -1,
+          at = c.splinePosition or 0, gearAt = clock() }
         return true
       end
     end
@@ -1644,11 +1648,19 @@ local function hraiTick(now)
     if m then
       local sp = c.splinePosition or 0
       if m.s > 0.9 and sp < 0.1 then
-        journal(string.format('a moved car crossing the line: %s, laps %d before, %d now (%s)', carLabel(i), m.lap,
-          c.lapCount or 0, (c.lapCount or 0) > m.lap and 'counted' or 'NOT counted'))
+        journal(string.format('a moved car crossing the line: %s, laps %d before, %d now (%s; moved at %.3f, sector %d, with %s)',
+          carLabel(i), m.lap, c.lapCount or 0, (c.lapCount or 0) > m.lap and 'counted' or 'NOT counted', m.at or -1,
+          m.sector or -1, m.how or '?'))
         moveCheck[i] = nil
       else
         m.s = sp
+      end
+      if m.gearAt and now - m.gearAt > 5 then
+        if field(c, 'gear') == 0 and (c.speedKmh or 0) < 5 then
+          journal(string.format('a moved car in neutral 5 s later: %s (%d rpm, gas %.2f)', carLabel(i), field(c, 'rpm') or 0,
+            field(c, 'gas') or 0))
+        end
+        m.gearAt = nil
       end
     end
     if settled then hraiIncident(i, c, now) end
@@ -2646,6 +2658,8 @@ local function runSafetyCar(dt)
         end
       end
       try(physics, 'awakeCar', scIndex)
+      try(physics, 'setCarAutoShifter', scIndex, true)
+      try(physics, 'engageGear', scIndex, 1)
       try(physics, 'setAILevel', scIndex, 1)
       scm.phase, scm.placedAt, scm.going, scm.virtual, scm.noted = 'lead', now, false, false, false
     end
@@ -2653,6 +2667,8 @@ local function runSafetyCar(dt)
   if sc and not scm.virtual and scm.phase ~= 'green' then try(physics, 'preventAIFromRetiring', scIndex) end
   if scm.phase == 'lead' and not scm.virtual and sc then
     if (sc.speedKmh or 0) > 30 then scm.going, scm.stillSince = true, nil end
+    -- (Neutral, below walking pace: into first, as it was seen sitting at 9000 rpm in neutral.)
+    if field(sc, 'gear') == 0 and (sc.speedKmh or 0) < 20 then try(physics, 'engageGear', scIndex, 1) end
     if scm.going and (sc.speedKmh or 0) < 5 then
       scm.stillSince = scm.stillSince or now
       if now - scm.stillSince > 4 then
