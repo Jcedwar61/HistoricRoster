@@ -1724,7 +1724,9 @@ local function hraiTick(now)
     -- beside it, which is the start of the lap, where a move doesn't cost the lap. (The camera car: see guardPitMenus.)
     if stuck and i ~= 0 and now - hrai.pitStill[i] > 60 and field(c, 'isInPit') then
       local ok, pos = try(ac, 'trackProgressToWorldCoordinate', c.splinePosition or 0)
-      if ok and pos and hiddenFromCamera(i, pos) then
+      -- (Out of shot if possible; after two minutes regardless: after the flag the camera stays on the last cars running,
+      -- and the race doesn't end, or get its result, until they finish.)
+      if ok and pos and (hiddenFromCamera(i, pos) or now - hrai.pitStill[i] > 120) then
         if not try(physics, 'setAICarPosition', i, pos, nil) then try(physics, 'setCarPosition', i, pos, nil) end
         try(physics, 'setSuspensionDamage', i, nil, 0)
         movedAt[i] = now
