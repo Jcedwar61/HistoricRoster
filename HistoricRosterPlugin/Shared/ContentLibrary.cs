@@ -183,9 +183,40 @@ public class ContentLibrary
 
     public static int? KunosYear(string folder) => KunosYears.TryGetValue(folder, out var y) ? y : null;
 
+    /// <summary>
+    /// The installed-car category a race class stands for (stand-ins of the same class): IMSA, ALMS, WEC and Le Mans
+    /// class names by era. Null when the class has no AC category.
+    /// </summary>
+    public static string? ClassCategory(string cls, int? year)
+    {
+        var c = Regex.Replace(cls.ToUpperInvariant(), @"[\s\-_.]", "");
+        return c switch
+        {
+            "GTP" or "GTPLIGHTS" or "CAMELLIGHTS" or "LIGHTS" when year is < 2000 => "Group C",
+            "GTP" or "LMH" or "LMDH" or "HYPERCAR" or "HY" when year is null or >= 2021 => "Hypercar",
+            "C1" or "C2" or "GROUPC" or "GROUPC1" or "GROUPC2" or "IMSAGTP" => "Group C",
+            "DPI" or "DP" or "P" or "P1" or "LMP1" or "LMP900" or "LMP1H" or "LMP1L" or "WSC" or "LMP" or "PROTOTYPE" when year is null or >= 1994 => "LMP1",
+            "LMP2" or "PC" or "LMP3" or "LMPC" or "LMP675" or "P2" or "LMP2AM" or "LMP2PROAM" => "LMP2",
+            "GTLM" or "GTE" or "GTEPRO" or "GTEAM" or "LMGTE" or "LMGTEPRO" or "LMGTEAM" or "GT2" or "LMGT2" => "GTE",
+            "GT" when year is >= 1999 and <= 2016 => "GTE",
+            // GTC (ALMS 2010-2013): Porsche GT3 Cup cars, the nearest installed class is GT3.
+            "GTD" or "GTDPRO" or "GT3" or "LMGT3" or "GTDAM" or "GTC" => "GT3",
+            "GT1" or "LMGT1" or "GTS1" => "GT1",
+            "GTS" when year is >= 1999 and <= 2004 => "GT1",
+            "GS" or "GT4" => "GT4",
+            "TCR" or "ST" or "TCA" => "TCR",
+            // IMSA GTO / GTU / GTX and the other GT classes before 1999: production-based cars, no prototype stand-ins.
+            "GTO" or "GTU" or "GTX" or "AAGT" or "AGT" or "IMSAGTO" or "IMSAGTU" or "IMSAGTX" or "GROUPB" or "GRB" or "GROUP5" or "GR5" => "Sportscar",
+            "GT" or "GTS" when year is < 1999 => "Sportscar",
+            _ => null,
+        };
+    }
+
     /// <summary>Works out the racing category of a car from its name, brand, tags and class.</summary>
     public static string? Classify(string name, string? brand, IReadOnlyList<string> tags, string? cls, int? year, string folder = "")
     {
+        // A race class on its own ("GTD", "DPi", "LMGTE Am"): what stand-ins are asked for.
+        if (brand == null && tags.Count == 0 && cls == null && folder.Length == 0 && ClassCategory(name, year) is { } byClass) return byClass;
         var text = $" {name} {brand} {cls} {string.Join(' ', tags)} {folder.Replace('_', ' ')} ".ToLowerInvariant().Replace("#", " ");
         var nameText = $" {name} {folder.Replace('_', ' ')} ".ToLowerInvariant();
         bool Has(string pattern) => Regex.IsMatch(text, pattern);
@@ -207,8 +238,12 @@ public class ContentLibrary
         if (Has(@"\bgrand ?prix ?(19[5-9]\d|20[0-3]\d)\b|\bgrandprix ?19[5-9]0")) return "F1";
         if (Has(@"\bgt1\b|lmgt1|\bf1 gtr\b|\bgt-?1\b|clk[- ]?gtr|clk[- ]?lm|\bmc12\b|911 gt1")) return "GT1";
         if (Has(@"\blmp2\b|\blmp3\b")) return "LMP2";
+        // Group C and IMSA GTP prototypes (1982-1993) by model name; a "GTP" before 2000 is one too.
+        if (Has(@"\b962c?\b|\b956\b|\bxjr-?(6|8|9|10|11|12|14)\b|sauber c9\b|\bc11\b mercedes|\bimsa gtp\b") && (year == null || year < 1995)) return "Group C";
+        if (Has(@"\bgtp\b") && year is < 2000) return "Group C";
         // "lmh_" is also the folder prefix of the 1960s-70s "Le Mans Hero" pack: Hypercars are 2018 on.
         if (Has(@"\blmh\b|\blmdh\b|\bgtp\b|le mans hypercar") && (year == null || year >= 2018)) return "Hypercar";
+        if (Has(@"\bdpi\b|daytona prototype")) return "LMP1";
         if (Has(@"\blmp1\b|lmp900|919 hybrid|\br18\b|\bts0[45]0\b|audi r10|peugeot 908|\blmp\b") && (year == null || year >= 1995)) return "LMP1";
         // Kunos tags both GT3 and GTE cars "#GTE-GT3": decide by the name first.
         if (NameHas(@"\bgt3\b") && !NameHas(@"gt3 ?rs\b|gt3 cup|\bcup\b")) return "GT3";
@@ -219,6 +254,9 @@ public class ContentLibrary
         // Sports prototypes and GT cars of the 1950s-80s (Le Mans, Sebring, Targa Florio, Can-Am, IMSA GTO/GTU/GTX).
         if ((Has(@"vintage gt\b|vintage can ?am|sports ?prototype|\bsportscar|\bsports car\b") || NameHas(@"330 p4|250 gto|\bgt40\b|\b917\b|\b908\b|\b935\b"))
             && (year == null || year < 1990)) return "Sportscar";
+        if (Has(@"\btcr\b")) return "TCR";
+        // CART chassis the IndyCar rule above doesn't name.
+        if (Has(@"reynard 9\d ?i\b|panoz dp01")) return "IndyCar";
         if (Has(@"\bf1\b|formula ?1\b|formula one|\bf20\d\d\b|\bsf\d\d-?[th]\b|\bmp4[-/ ]?\d{1,2}\b|\bfw\d\d\b")
             && !Has(@"mclaren f1\b(?! ?\d)|\bf1 road\b")) return "F1";
         // Kunos grand prix cars are tagged "gp" + "singleseater" without saying F1 (Lotus 25/72D, 312T, 98T, 250F).

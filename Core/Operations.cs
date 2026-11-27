@@ -10,8 +10,11 @@ public record DbBuildOptions
     /// <summary>F1 goes back to 1950; the other series start where their sources do (NASCAR feed 2017, Wikipedia events per event).</summary>
     public int From { get; init; } = 1950;
     public int To { get; init; } = DateTime.UtcNow.Year;
-    /// <summary>f1, nascar, endurance, nascar-classic</summary>
-    public string[] Series { get; init; } = { "f1", "nascar", "endurance", "nascar-classic" };
+    /// <summary>f1, nascar, endurance, nascar-classic, imsa (IMSA timing archive), and the championships read from
+    /// Wikipedia season articles: wec, imsa-classic, indycar, cart, dtm, supercars.</summary>
+    public string[] Series { get; init; } = AllSeries;
+    public static readonly string[] AllSeries =
+        { "f1", "nascar", "endurance", "nascar-classic", "imsa", "wec", "imsa-classic", "indycar", "cart", "dtm", "supercars" };
     /// <summary>1 = Cup, 2 = Xfinity, 3 = Truck.</summary>
     public int[] NascarSeries { get; init; } = { 1 };
     public bool Refresh { get; init; }
@@ -19,7 +22,7 @@ public record DbBuildOptions
     public AiSettings? Ai { get; init; }
 }
 
-/// <summary>Downloads real race results into historic_rosters_db.json (F1 API, NASCAR feed, Wikipedia).</summary>
+/// <summary>Downloads real race results into historic_rosters_db.json (F1 API, NASCAR feed, IMSA timing archive, Wikipedia).</summary>
 public static class DatabaseBuilder
 {
     public static async Task<RosterDatabase> BuildAsync(string dbPath, DbBuildOptions o, IProgress<string> log, CancellationToken ct = default)
@@ -94,6 +97,50 @@ public static class DatabaseBuilder
         var skipPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dbPath))!, "_wiki_no_results.json");
         var skip = o.Refresh ? new HashSet<string>() : AppData.Load<HashSet<string>>(skipPath) ?? new HashSet<string>();
 
+        // IMSA (WeatherTech and Michelin Pilot Challenge) from IMSA's timing archive: every round from 2016 on. These
+        // official results replace the Wikipedia copies of Daytona, Sebring and Petit Le Mans (same ids).
+        static bool FromImsa(Roster r) => r.Source?.StartsWith(ImsaImporter.BaseUrl, StringComparison.OrdinalIgnoreCase) == true;
+        if (o.Series.Contains("imsa"))
+        {
+            var imsa = new ImsaImporter();
+            var known = db.Rosters.Where(FromImsa).Select(r => r.Source!).ToHashSet();
+            foreach (var series in ImsaImporter.AllSeries)
+                for (var y = Math.Max(o.From, ImsaImporter.FirstYear); y <= to; y++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    // A past season already read completely isn't listed again (each listing is ~50 requests).
+                    if (!o.Refresh && y < DateTime.Now.Year && skip.Contains($"imsa-season:{series.Key}-{y}")) continue;
+                    List<ImsaRaceRef> races;
+                    try { races = await imsa.ListSeasonAsync(y, series, ct); }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) { failures++; log.Report($"{series.Name} {y}: list failed ({ex.Message})"); continue; }
+                    var got = 0;
+                    var complete = true;
+                    foreach (var race in races.Where(r => r.LocalStart < DateTime.Now))
+                    {
+                        if (!o.Refresh && (known.Contains(race.Url) || skip.Contains("imsa:" + race.Url))) continue;
+                        try
+                        {
+                            var r = await imsa.ImportAsync(race, ct);
+                            if (r == null)
+                            {
+                                if (race.LocalStart < DateTime.Now.AddDays(-14)) skip.Add("imsa:" + race.Url);
+                                else complete = false;
+                                continue;
+                            }
+                            Add(r);
+                            known.Add(race.Url);
+                            got++;
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex) { failures++; complete = false; log.Report($"  {race.Event} {race.Session}: {ex.Message}"); }
+                        await Task.Delay(150, ct);
+                    }
+                    if (complete && races.Count > 0 && y < DateTime.Now.Year) skip.Add($"imsa-season:{series.Key}-{y}");
+                    log.Report(got > 0 ? $"{series.Name} {y}: {got} new races" : $"{series.Name} {y}: up to date");
+                }
+        }
+
         var wiki = new WikipediaImporter();
         var events = WikipediaImporter.Events.Where(e =>
             (o.Series.Contains("endurance") && e.Category(2000) != "NASCAR") ||
@@ -109,6 +156,7 @@ public static class DatabaseBuilder
                     && (o.Series.Contains("nascar") || db.Rosters.Any(r => r.Year == y && r.Id.StartsWith("nascar-")))) continue;
                 var id = RosterIds.Slugify($"{ev.Key}-{y}");
                 if (!o.Refresh && (db.Contains(id) || skip.Contains(id))) continue;
+                if (db.Rosters.Any(r => r.Id == id && FromImsa(r))) continue; // IMSA's official results are better
                 try
                 {
                     var r = await wiki.ImportAsync(ev, y, ct);
@@ -120,6 +168,74 @@ public static class DatabaseBuilder
                 await Task.Delay(200, ct);
             }
             log.Report(got > 0 ? $"{ev.Series}: {got} new events" : $"{ev.Series}: up to date");
+        }
+
+        // Championships read through their Wikipedia season articles: every linked race article with a classification.
+        static string? WikiTitle(string? source)
+        {
+            var i = source?.LastIndexOf("/wiki/", StringComparison.Ordinal) ?? -1;
+            return i < 0 ? null : Uri.UnescapeDataString(source![(i + 6)..]).Replace('_', ' ');
+        }
+        var wikiSources = db.Rosters.Select(r => WikiTitle(r.Source)).Where(t => t != null).Cast<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var seasons = new WikiSeasonImporter();
+        foreach (var series in WikiSeasonImporter.Series.Where(s => o.Series.Contains(s.Key)))
+        {
+            var got = 0;
+            for (var y = Math.Max(o.From, series.FromYear); y <= Math.Min(to, series.ToYear); y++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var seasonKey = $"season:{series.Key}-{y}";
+                var carsKey = $"cars:{series.Key}-{y}";
+                // This season's races whose tables name no car: the season's entry list gives each driver's chassis.
+                var carless = db.Rosters.Where(r => r.Year == y && r.Id.StartsWith(series.Key + "-") && r.Entries.Any(e => e.Car == null)).ToList();
+                if (!o.Refresh && skip.Contains(seasonKey) && (carless.Count == 0 || skip.Contains(carsKey))) continue;
+                (string Title, string Html)? season;
+                try { season = await seasons.SeasonAsync(series, y, ct); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { failures++; log.Report($"  {series.Key} {y}: {ex.Message}"); continue; }
+                if (season is not { } s)
+                {
+                    if (y < DateTime.Now.Year) skip.Add(seasonKey);
+                    continue;
+                }
+                var seasonCars = WikipediaImporter.EntryCars(s.Html);
+                foreach (var r in carless) WikiSeasonImporter.FillCars(r, seasonCars);
+                skip.Add(carsKey);
+                var complete = true;
+                foreach (var title in WikiSeasonImporter.RaceLinks(s.Html, y, s.Title.Contains('–')))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    // Races already in the database (Le Mans, Bathurst, the Indy 500 of another season article ...).
+                    if (wikiSources.Contains(title) || (!o.Refresh && skip.Contains("wiki:" + title))) continue;
+                    if (skip.Contains(seasonKey)) continue; // only the entry list was needed this time
+                    try
+                    {
+                        var raceDay = await seasons.ImportRaceAsync(series, title, ct);
+                        if (raceDay.Count == 0)
+                        {
+                            if (!title.StartsWith(DateTime.Now.Year.ToString())) skip.Add("wiki:" + title);
+                            else complete = false;
+                        }
+                        else if (!wikiSources.Contains(WikiTitle(raceDay[0].Source) ?? ""))
+                        {
+                            foreach (var r in raceDay)
+                            {
+                                WikiSeasonImporter.FillCars(r, seasonCars);
+                                Add(r);
+                            }
+                            wikiSources.Add(WikiTitle(raceDay[0].Source)!);
+                            got += raceDay.Count;
+                        }
+                        wikiSources.Add(title);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex) { failures++; complete = false; log.Report($"  {title}: {ex.Message}"); }
+                    await Task.Delay(300, ct);
+                }
+                if (complete && y < DateTime.Now.Year) skip.Add(seasonKey);
+                try { AppData.Save(skipPath, skip); } catch { /* only saves time next run */ }
+            }
+            log.Report(got > 0 ? $"{series.Key}: {got} new races" : $"{series.Key}: up to date");
         }
 
         // One copy per race: for NASCAR seasons the feed covers, drop the Wikipedia crown-jewel copies.
@@ -234,7 +350,7 @@ public static class LibraryScanner
     public const string CatalogFile = "content_catalog.installed.json";
 
     /// <summary>Bumped when the matching logic changes, so the next start re-scans even if no folder changed.</summary>
-    private const int ScanVersion = 4; // 3: Ram trucks matched as "RAM"; 4: trucks and Cup cars kept apart
+    private const int ScanVersion = 5; // 3: Ram trucks matched as "RAM"; 4: trucks and Cup cars kept apart; 5: IMSA, IndyCar, DTM, GT4, TCR, Group C
     private const string StampFile = "_library_scan.json";
 
     private record ScanStamp(string ContentFolder, DateTime CarsUtc, DateTime TracksUtc, int Cars, int Tracks, int Version);
@@ -280,7 +396,7 @@ public static class LibraryScanner
         var stock = new List<(CarInfo Car, string Make, string Variant)>();
         var skipped = 0;
         foreach (var car in lib.Cars.Where(c => c.Category is "F1" or "NASCAR" or "GT1" or "GT3" or "GTE" or "LMP1" or "LMP2" or "Hypercar" or "Supercars"
-                                             or "IndyCar" or "DTM" or "Group C" or "Sportscar" or "GT4"))
+                                             or "IndyCar" or "DTM" or "Group C" or "Sportscar" or "GT4" or "TCR"))
         {
             if (car.Year == null) { skipped++; continue; }
             var note = $"Installed: {car.Name} (from scan)";
