@@ -1318,6 +1318,7 @@ local function towTick(dt)
       tows[i] = nil
       movedAt[i] = now
       if c and onTrack then
+        try(physics, 'setSuspensionDamage', i, nil, 0) -- (bent in the off; repairing it doesn't spoil the lap)
         journal(string.format(t.onTrack and 'pulled on along the track: %s, in %.0f s' or 'towed back onto the track: %s, in %.0f s',
           carLabel(i), now - t.since))
       elseif c and sim.isSessionStarted then
@@ -2930,35 +2931,51 @@ end
 
 -- A watched race is a broadcast: AC's pit screens never come up on it, but every car still pits as it would. CSP's
 -- quick pit-stop menu is switched off; the camera car (CAR_0, the "user" seat, driven by the AI) is the one car AC
--- opens its pit menu for, waiting for someone to press a button. So once it's stopped in its pit box and the crew is
--- done (or after 25 s), the button is pressed for it and it drives out. Should that ever fail to get it going, it's
--- kept out of the pits (and fuelled) for the rest of the race instead, so it can't sit there.
+-- parks in its pit box until someone presses the pit menu's button. So once it's stopped there and the crew is done (or
+-- after 25 s), it's released: the button pressed, the player's car un-parked and its controls and gearbox unlocked.
+-- If it's still there 20 s later, it's put on the racing line beside its pit box (the start of the lap, where a move
+-- doesn't cost the lap) and kept out of the pits, and fuelled, for the rest of the race and in later races.
 -- (Not a car going into the pits to retire as it did in real life: that one stays there.)
-local pitGuard = { pressedAt = -1e9, stoppedAt = nil, noted = false, noPits = false }
+local pitGuard = { pressedAt = -1e9, stoppedAt = nil, releasedAt = nil, noted = false, noPits = nil, store = nil }
 local function guardPitMenus()
   try(ac, 'disableQuickMenuPitstop', true)
+  if pitGuard.noPits == nil then
+    local ok, st = try(ac, 'storage', 'hr.camPitStuck', '')
+    pitGuard.store = ok and st or nil
+    pitGuard.noPits = pitGuard.store ~= nil and pitGuard.store:get() == 'yes'
+  end
   local sim = ac.getSim()
   local car = ac.getCar(0)
   local e = real.cars[0]
   if not car or not sim.isSessionStarted or userDriving() or not car.isAIControlled or (e and (e.pitting or e.retired)) then
     return
   end
-  if not field(car, 'isInPit') then pitGuard.stoppedAt, pitGuard.noted = nil, false return end
+  if not field(car, 'isInPit') then pitGuard.stoppedAt, pitGuard.releasedAt, pitGuard.noted = nil, nil, false return end
   local now = clock()
   pitGuard.stoppedAt = pitGuard.stoppedAt or now
   local busy = field(car, 'isRefueling') == true or field(car, 'isChangingTyres') == true or field(car, 'isRepairing') == true
   local waited = now - pitGuard.stoppedAt
   if ((waited > 4 and not busy) or waited > 25) and now - pitGuard.pressedAt > 2 then
     pitGuard.pressedAt = now
+    pitGuard.releasedAt = pitGuard.releasedAt or now
     try(ac, 'tryToStart', true)
+    try(physics, 'setCarNoInput', false)
+    try(physics, 'lockUserControlsFor', 0)
+    try(physics, 'lockUserGearboxFor', 0)
     if not pitGuard.noted then
       pitGuard.noted = true
-      journal(string.format('pit stop for the camera car: %s; its pit menu closed for it after %.0f s', carLabel(0), waited))
+      journal(string.format('pit stop for the camera car: %s; released from its pit box after %.0f s', carLabel(0), waited))
     end
   end
-  if waited > 45 and not pitGuard.noPits then
-    pitGuard.noPits = true
-    journal(string.format('the camera car pit menu could not be closed: %s is kept out of the pits for the rest of the race',
+  if pitGuard.releasedAt and now - pitGuard.releasedAt > 20 then
+    -- Still parked: onto the racing line beside its pit box, out of the pits from now on.
+    local ok, pos = try(ac, 'trackProgressToWorldCoordinate', car.splinePosition or 0)
+    if ok and pos then
+      if not try(physics, 'setAICarPosition', 0, pos, nil) then try(physics, 'setCarPosition', 0, pos, nil) end
+    end
+    pitGuard.noPits, pitGuard.releasedAt, pitGuard.stoppedAt = true, nil, nil
+    if pitGuard.store then pitGuard.store:set('yes') end
+    journal(string.format('the camera car stayed parked in its pit box: %s put on the track beside it, and kept out of the pits from now on',
       carLabel(0)))
   end
 end
