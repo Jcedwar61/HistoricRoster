@@ -41,6 +41,8 @@ public class ContentLibrary
     public static ContentLibrary Load(string contentFolder)
     {
         contentFolder = Path.GetFullPath(contentFolder);
+        // Cars and tracks added to another AC install on this PC are linked in first, so they're always in the library.
+        TrackLinks.LinkNewContent(contentFolder);
         var stamp = Stamp(contentFolder);
         lock (CacheLock)
         {

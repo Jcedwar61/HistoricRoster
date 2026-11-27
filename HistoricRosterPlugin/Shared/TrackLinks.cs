@@ -17,6 +17,23 @@ public static class TrackLinks
     /// <summary>Links the cars other installs have and this one doesn't. Returns the folders linked now.</summary>
     public static IReadOnlyList<string> LinkCarsFromOtherInstalls(string contentFolder) => Link(contentFolder, "cars", IsCar);
 
+    private static readonly Dictionary<string, DateTime> LastCheck = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Links any cars and tracks added to another install since the last check. Called whenever the content library is
+    /// read (program, RosterTool and the server plugin alike), at most every 30 seconds per content folder.
+    /// </summary>
+    public static void LinkNewContent(string contentFolder)
+    {
+        lock (LastCheck)
+        {
+            if (LastCheck.TryGetValue(contentFolder, out var t) && DateTime.UtcNow - t < TimeSpan.FromSeconds(30)) return;
+            LastCheck[contentFolder] = DateTime.UtcNow;
+        }
+        Link(contentFolder, "cars", IsCar);
+        Link(contentFolder, "tracks", IsTrack);
+    }
+
     private static IReadOnlyList<string> Link(string contentFolder, string kind, Func<string, bool> isContent)
     {
         var linked = new List<string>();
