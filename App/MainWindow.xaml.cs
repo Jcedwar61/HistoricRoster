@@ -152,20 +152,31 @@ public partial class MainWindow : Window
             _settings.ContentFolder = null;
             _settings.Save();
         }
+        IReadOnlyList<AcInstallLocator.Candidate>? found = null;
         try
         {
             if (_settings.ContentFolder == null)
             {
                 InstallText.Text = "Looking for Assetto Corsa ...";
-                var found = await Task.Run(() => AcInstallLocator.FindAll());
+                found = await Task.Run(() => AcInstallLocator.FindAll());
                 foreach (var c in found) Log($"Found Assetto Corsa: {c.Root} ({c.Source})");
             }
             _ws = Workspace.Open(_settings.ContentFolder, RostersFolder, Path.Combine(AppContext.BaseDirectory, "rosters"));
         }
         catch (Exception ex)
         {
+            // Whatever went wrong (no install found, or one found but it couldn't be opened) goes in the error log
+            // with what was found, and its reason on screen: the Activity panel isn't kept after the program closes.
             Log(ex.Message);
-            if (!PickAcFolder()) { InstallText.Text = "Assetto Corsa not found - use Settings to select it."; return; }
+            var installs = found == null ? $"saved folder {_settings.ContentFolder ?? "(none)"}"
+                : found.Count == 0 ? "no install found"
+                : "found " + string.Join("; ", found.Select(c => $"{c.Root} ({c.Source})"));
+            App.LogError($"Opening Assetto Corsa: {installs}", ex);
+            if (!PickAcFolder())
+            {
+                InstallText.Text = $"Couldn't open Assetto Corsa ({ex.Message}) - use Settings to select it. Details: {App.LogPath}";
+                return;
+            }
             _ws = Workspace.Open(_settings.ContentFolder, RostersFolder, Path.Combine(AppContext.BaseDirectory, "rosters"));
         }
 
