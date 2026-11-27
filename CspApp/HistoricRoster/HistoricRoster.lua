@@ -1152,6 +1152,28 @@ local function loadRealResult()
   end
 end
 
+-- The watched race's own journal (Documents\Assetto Corsa\logs\HistoricRoster.log, new for each race): every car the
+-- app moves, puts back on track or retires, and the running order every 30 s, so a race can be checked against the
+-- real result afterwards.
+local journalFile = nil
+local function journal(text)
+  pcall(function()
+    if journalFile == nil then
+      journalFile = io.open(ac.getFolder(ac.FolderID.Logs) .. '/HistoricRoster.log', 'w') or false
+      if journalFile then journalFile:write('=== Historic Roster watched race, ' .. os.date('%Y-%m-%d %H:%M:%S') .. ' ===\n') end
+    end
+    if journalFile then
+      journalFile:write(string.format('%s  %s\n', os.date('%H:%M:%S'), text))
+      journalFile:flush()
+    end
+  end)
+end
+local function carLabel(i)
+  local c = ac.getCar(i)
+  return string.format('%s [car %d, P%d, lap %d, at %.3f]', ac.getDriverName(i) or '?', i, c and c.racePosition or 0,
+    c and c.lapCount or -1, c and c.splinePosition or -1)
+end
+
 -- Laps run (completed laps + progress on the current one). Before a car first crosses the start line its
 -- track progress is ~0.99, so that part only counts once it has crossed.
 local function lapsRun(c, e)
@@ -1194,6 +1216,7 @@ local function rescueStuck(i, c, step)
         if other and other.position and other.position:distance(pos) < 25 then clear = false end
       end
       if clear then
+        journal(string.format('put back on track after standing still 8 s: %s, %d m on', carLabel(i), k * 10))
         if try(physics, 'setCarPosition', i, pos, nil) then try(physics, 'setCarVelocity', i, vec3(0, 0, 0)) end
         return true
       end
@@ -1223,16 +1246,32 @@ local function reorderOffCamera(want)
   if now - reorder.at < 3 then return end
   local len = math.max(field(ac.getSim(), 'trackLengthM') or 5000, 500)
   for k = 1, #want - 1 do
-    local a, b = want[k], want[k + 1] -- a must be ahead of b
-    if (a.c.lapCount or 0) == (b.c.lapCount or 0) and lapsRun(a.c, a.e) < lapsRun(b.c, b.e)
-      and now - (reorder.last[a.i] or -1e9) > 20 and not field(a.c, 'isInPitlane') and not field(b.c, 'isInPitlane')
+    -- a must be ahead of every car after it in the real order: b is the furthest ahead of those running in front of
+    -- it on the same lap.
+    local a, b = want[k], nil
+    local pa = lapsRun(a.c, a.e)
+    for m = k + 1, #want do
+      local x = want[m]
+      if (x.c.lapCount or 0) == (a.c.lapCount or 0) and lapsRun(x.c, x.e) > pa
+        and (b == nil or lapsRun(x.c, x.e) > lapsRun(b.c, b.e)) then b = x end
+    end
+    if b and now - (reorder.last[a.i] or -1e9) > 20 and not field(a.c, 'isInPitlane') and not field(b.c, 'isInPitlane')
       and hiddenFromCamera(a.i, a.c.position) and hiddenFromCamera(b.i, b.c.position) then
       local target = (b.c.splinePosition or 0) + 40 / len
-      if target < 0.995 and target > (a.c.splinePosition or 0) then
+      if target < 0.99 and target > (a.c.splinePosition or 0) then
         local ok, pos = try(ac, 'trackProgressToWorldCoordinate', target)
-        if ok and pos and hiddenFromCamera(a.i, pos) and clearOf(pos, a.i) then
-          if try(physics, 'setCarPosition', a.i, pos, nil) and b.c.velocity then
-            try(physics, 'setCarVelocity', a.i, b.c.velocity)
+        -- Only on a straight (the line turns less than 9 degrees over the next 60 m): put in a corner at the speed of
+        -- a car on the straight behind, it would go straight off.
+        local ahead = ok and pos and ac.trackProgressToWorldCoordinate(math.min(target + 60 / len, 0.999))
+        local back = ok and pos and ac.trackProgressToWorldCoordinate(math.max(target - 5 / len, 0))
+        local dir = ahead and back and ahead:clone():sub(pos):normalize()
+        local straight = dir and back and math.acos(math.clamp(dir:dot(pos:clone():sub(back):normalize()), -1, 1)) < 0.15
+        if straight and hiddenFromCamera(a.i, pos) and clearOf(pos, a.i) then
+          journal(string.format('real order: %s (real P%d) moved 40 m ahead of %s (real P%d)', carLabel(a.i), a.e.pos or 0,
+            carLabel(b.i), b.e.pos or 0))
+          -- At that car's speed, along the racing line.
+          if try(physics, 'setCarPosition', a.i, pos, nil) then
+            try(physics, 'setCarVelocity', a.i, dir:clone():scale((b.c.speedKmh or 0) / 3.6))
           end
           reorder.at, reorder.last[a.i] = now, now
           return
@@ -1251,6 +1290,7 @@ end
 
 local function retireCar(i, e, c)
   if not e.pitting then
+    journal(string.format('retiring as in real life (real laps %d): %s', e.laps or 0, carLabel(i)))
     e.pitting, e.pitSince = true, clock()
     releaseCar(i, e)
     try(physics, 'setAIPitStopRequest', i, true)
@@ -1293,6 +1333,10 @@ local function steerToRealResult(step)
         table.insert(running, { i = i, e = e, c = c })
         e.steered = true
         if i ~= 0 then rescueStuck(i, c, step or 0.5) end -- (the user's car is rescued every tick, steered or not)
+        -- No breakdowns on the way to the real result (a car retires where it did in real life, not before): the
+        -- engine is kept as new. (A car moved at speed can over-rev in the gear it was in.)
+        local life = field(c, 'engineLifeLeft')
+        if life and life < 1000 then pcall(physics.setCarEngineLife, i, 1000) end
       elseif e.steered and not e.pitting then
         -- Finished (or you took over your seat): back to its normal pace and collisions.
         releaseCar(i, e)
@@ -1341,6 +1385,17 @@ local function steerToRealResult(step)
     pcall(physics.disableCarCollisions, r.i, final and err ~= 0 and hidden)
   end
   if progress > 0.5 then reorderOffCamera(want) end
+
+  -- The running order, every 30 s.
+  if clock() - (real.snapshotAt or -1e9) > 30 then
+    real.snapshotAt = clock()
+    local parts = {}
+    for _, r in ipairs(running) do
+      table.insert(parts, string.format('P%d %s (real %s, lap %d, %.3f)', r.c.racePosition or 0, ac.getDriverName(r.i) or '?',
+        r.e.pos > 0 and 'P' .. r.e.pos or 'DNF', r.c.lapCount or 0, r.c.splinePosition or 0))
+    end
+    journal(string.format('running order at %.0f%% (%d out of place): %s', progress * 100, real.outOfPlace, table.concat(parts, '; ')))
+  end
 end
 
 local function releaseAll()
@@ -1477,7 +1532,65 @@ local function coverage(pos, progress)
   return walk(-1), walk(1)
 end
 
+-- The track's own TV cameras (data/cameras.ini, cameras_1.ini ...: placed by the track's maker for AC's replays), when
+-- it has them: far better placed than any worked out here. Each covers a stretch of the lap (IN_POINT to OUT_POINT)
+-- and often stands far away on a long lens, so it films from further than MAX_RANGE.
+local TRACK_CAM_RANGE = 900
+local function loadTrackCameras()
+  local folder = ac.getFolder(ac.FolderID.CurrentTrackLayout) .. '/data/'
+  local len = trackLen()
+  local list = {}
+  for n = 0, 9 do
+    local text = io.load(folder .. (n == 0 and 'cameras.ini' or ('cameras_' .. n .. '.ini')))
+    if text then
+      local cam
+      local function finish()
+        if not (cam and cam.pos and cam.inP and cam.outP) then return end
+        local span = (cam.outP - cam.inP) % 1
+        if span <= 0 or span > 0.5 then return end
+        -- Its own point of the track: the one nearest the camera, kept inside its stretch.
+        local near = ac.worldCoordinateToTrackProgress(cam.pos)
+        local into = near >= 0 and (near - cam.inP) % 1 or span / 2
+        if into > span then into = span / 2 end
+        local progress = (cam.inP + into) % 1
+        local base = ac.trackProgressToWorldCoordinate(progress)
+        local tangent = ac.trackProgressToWorldCoordinate((progress + 10 / len) % 1):sub(base)
+        tangent.y = 0
+        tangent:normalize()
+        local side = tangent:cross(UP, vec3()):dot(cam.pos:clone():sub(base)) > 0 and 1 or -1
+        table.insert(list, { pos = cam.pos, progress = progress, back = into * len, fwd = (span - into) * len,
+          high = cam.pos.y - base.y > 8, side = side, range = TRACK_CAM_RANGE, track = true })
+      end
+      for line in text:gmatch('[^\r\n]+') do
+        if line:match('^%[CAMERA_') then
+          finish()
+          cam = {}
+        elseif cam then
+          local k, v = line:match('^%s*([%w_]+)%s*=%s*(.-)%s*$')
+          if k == 'POSITION' then
+            local x, y, z = v:match('([%-%d%.eE]+)%s*,%s*([%-%d%.eE]+)%s*,%s*([%-%d%.eE]+)')
+            if x then cam.pos = vec3(tonumber(x), tonumber(y), tonumber(z)) end
+          elseif k == 'IN_POINT' then cam.inP = tonumber(v)
+          elseif k == 'OUT_POINT' then cam.outP = tonumber(v) end
+        end
+      end
+      finish()
+    end
+  end
+  return list
+end
+
 local function buildSpot()
+  -- First choice: the track's own TV cameras.
+  if not spots.trackTried then
+    spots.trackTried = true
+    local ok, list = pcall(loadTrackCameras)
+    if ok and #list >= 6 then
+      spots.list, spots.built, spots.fromTrack = list, true, true
+      journal(string.format('director: %d of the track\'s own TV cameras', #list))
+      return
+    end
+  end
   if spots.count == 0 then spots.count = math.clamp(math.floor(trackLen() / 110), 16, 80) end
   local k = spots.next
   if k >= spots.count then spots.built = true return end
@@ -1541,7 +1654,7 @@ local function pastSpot(c, spot) return progressDelta(c.splinePosition, spot.pro
 local function spotCovers(spot, c, ahead)
   local rel = pastSpot(c, spot)
   return rel >= -spot.back and rel <= spot.fwd - (ahead or 0)
-    and spot.pos:distance(carPoint(c)) <= MAX_RANGE and clearView(spot.pos, carPoint(c))
+    and spot.pos:distance(carPoint(c)) <= (spot.range or MAX_RANGE) and clearView(spot.pos, carPoint(c))
 end
 
 -- Fastest a trackside camera pans to follow a car (radians a second, about 65°/s). Faster than that the picture
@@ -1587,7 +1700,7 @@ local function spotFor(c, opts)
   for _, sp in ipairs(spots.list) do
     if sp ~= opts.last then
       local rel = pastSpot(c, sp)
-      if rel >= -sp.back and rel <= sp.fwd - 25 and sp.pos:distance(point) <= MAX_RANGE then
+      if rel >= -sp.back and rel <= sp.fwd - 25 and sp.pos:distance(point) <= (sp.range or MAX_RANGE) then
         local inStretch = (sp.fwd - rel) / speed -- seconds the car stays in this camera's stretch
         if inStretch >= 2 then
           local bonus = math.random() * 2
@@ -1769,7 +1882,7 @@ local function shotOver(c)
       or (s.age > 2 and smoothSeconds(s.spot.pos, c, 0.4) < 0.4)) then return true end
     local rel = pastSpot(c, s.spot)
     if rel > s.spot.fwd or rel < -s.spot.back - 30 then return true end -- out of this camera's stretch: the next one
-    if s.spot.pos:distance(carPoint(c)) > MAX_RANGE + 30 then return true end
+    if s.spot.pos:distance(carPoint(c)) > (s.spot.range or MAX_RANGE) + 30 then return true end
     if rel > 30 and s.age > 4 and s.spot.pos:distance(c.position) > 100 then return true end -- gone by, heading away
     return s.age > s.length
   end
@@ -2523,7 +2636,8 @@ local function tabWatch()
     ui.sameLine()
     if ui.button('Next car') then watch.follow, watch.targetHeld, watch.skip = 'grid', 99, true end
     if hasSpline() then
-      ui.textDisabled(spots.built and (#spots.list .. ' trackside cameras placed round the track')
+      ui.textDisabled(spots.built and (spots.fromTrack and (#spots.list .. ' of the track\'s own TV cameras')
+          or (#spots.list .. ' trackside cameras placed round the track'))
         or ('Placing trackside cameras... (' .. #spots.list .. ' so far)'))
     end
   else
