@@ -1160,8 +1160,13 @@ local journalFile = nil
 local function journal(text)
   pcall(function()
     if journalFile == nil then
-      journalFile = io.open(ac.getFolder(ac.FolderID.Logs) .. '/HistoricRoster.log', 'w') or false
-      if journalFile then journalFile:write('=== Historic Roster watched race, ' .. os.date('%Y-%m-%d %H:%M:%S') .. ' ===\n') end
+      -- (The app restarted during a race, when it's been updated: added to the same journal, not started afresh.)
+      local mid = ac.getSim().isSessionStarted
+      journalFile = io.open(ac.getFolder(ac.FolderID.Logs) .. '/HistoricRoster.log', mid and 'a' or 'w') or false
+      if journalFile then
+        journalFile:write((mid and '=== Historic Roster restarted mid-race, ' or '=== Historic Roster watched race, ')
+          .. os.date('%Y-%m-%d %H:%M:%S') .. ' ===\n')
+      end
     end
     if journalFile then
       journalFile:write(string.format('%s  %s\n', os.date('%H:%M:%S'), text))
