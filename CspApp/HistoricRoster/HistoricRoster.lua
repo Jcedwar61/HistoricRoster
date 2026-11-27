@@ -1517,7 +1517,7 @@ local function hasSpline() return trackLen() > 100 end
 --    that car, and lifts a little until it's by;
 --  * wheel to wheel: two cars side by side are nudged apart, so they don't touch;
 --  * and the real-result steering's pace for each car (AI level, grip, throttle), applied together with all that.
-local hrai = { loaded = false, nbins = 1, danger = {}, seen = {}, last = {}, counted = {}, points = 0, store = nil, still = {} }
+local hrai = { loaded = false, nbins = 1, danger = {}, seen = {}, last = {}, counted = {}, points = 0, store = nil, still = {}, noted = {}, pitStill = {} }
 local DANGER_BIN = 25  -- metres of track per danger counter
 local DANGER_COUNT = 3 -- cars with an incident at one point that make it a danger point
 local DANGER_MAX = 10  -- danger points per track at most
@@ -1585,6 +1585,25 @@ local function dangerAhead(c)
   return false
 end
 
+-- AC's AI brakes for a while after an incident (its "stop counter"), and a car stopped behind a stopped car waits with
+-- it: that's how most of a watched race's stalls start. A car standing still 3 s is told to go again (unlike moving it,
+-- that doesn't cost it any time it hasn't already lost), and kept from being retired: AC retires an AI car that stands
+-- still long enough, and a retired car never drives again. At 10 s what it's doing goes in the journal, once.
+local function hraiUnstick(i, c, now, since, where)
+  local still = now - since
+  if still > 3 then try(physics, 'setAIStopCounter', i, 0) end
+  if still > 5 then try(physics, 'preventAIFromRetiring', i) end
+  if still > 10 and not hrai.noted[i] then
+    hrai.noted[i] = true
+    journal(string.format('standing still 10 s%s: %s; gear %s, %d rpm, gas %.2f, brake %.2f, steer %.0f, %d wheels off, %s%s',
+      where or '', carLabel(i), tostring(field(c, 'gear')), field(c, 'rpm') or 0, field(c, 'gas') or 0,
+      field(c, 'brake') or 0, field(c, 'steer') or 0, field(c, 'wheelsOutside') or 0,
+      (field(c, 'collidedWith') or -1) > 0 and ('touching car ' .. (field(c, 'collidedWith') - 1))
+        or field(c, 'collidedWith') == 0 and 'touching the track' or 'touching nothing',
+      field(c, 'isRetired') and ', RETIRED' or ''))
+  end
+end
+
 local function hraiTick(now)
   if not hasSpline() then return end
   if not hrai.loaded then hraiLoad() end
@@ -1602,21 +1621,39 @@ local function hraiTick(now)
       table.insert(cars, { i = i, c = c, run = (c.lapCount or 0) + (c.splinePosition or 0) })
     end
   end
+  for i = 0, sim.carsCount - 1 do
+    local c = ac.getCar(i)
+    local e = real.cars[i]
+    local stuck = settled and c and isRaceCar(i) and c.isAIControlled and field(c, 'isInPitlane')
+      and not field(c, 'isRaceFinished') and not (e and (e.pitting or e.retired)) and (c.speedKmh or 0) < 5
+    hrai.pitStill[i] = stuck and (hrai.pitStill[i] or now) or nil
+    if stuck and now - hrai.pitStill[i] > 45 then
+      try(physics, 'setAIPitStopRequest', i, false)
+      try(physics, 'setAITimeToStart', i, 0)
+      try(physics, 'setAINoInput', i, false)
+      hraiUnstick(i, c, now, hrai.pitStill[i] - 35, ' in the pit lane')
+    end
+  end
   for _, a in ipairs(cars) do
     local i, c = a.i, a.c
     if settled then hraiIncident(i, c, now) end
     hrai.still[i] = (c.speedKmh or 0) < 5 and (hrai.still[i] or now) or nil
+    if not hrai.still[i] then hrai.noted[i] = nil elseif settled then hraiUnstick(i, c, now, hrai.still[i]) end
     local p = pace[i] or {}
     local throttle, grip, caution, offset = p.throttle or 1, p.grip or GRIP_BASE, 1, 0
     local underSc = scActive()
     if underSc then caution, throttle = 2, 1 end
     if settled and not underSc and dangerAhead(c) then caution, throttle, grip = 1.5, math.min(throttle, 0.85), grip + 0.04 end
     local side = field(c, 'side')
+    local around = false
     for _, b in ipairs(cars) do
       if settled and not underSc and b.i ~= i and side and b.c.position and c.position then
         local ahead = progressDelta(b.c.splinePosition or 0, c.splinePosition or 0) * len -- metres b is ahead of a
         local lateral = b.c.position:clone():sub(c.position):dot(side)                   -- metres b is to a's side
-        if ahead > 0 and ahead < 250 and hrai.still[b.i] and now - hrai.still[b.i] > 4 then
+        if ahead > 0 and ahead < 60 and hrai.still[b.i] and now - hrai.still[b.i] > 4 and (c.speedKmh or 0) < 40 then
+          -- Queued behind a stopped car (AC's AI waits behind it, like behind any car it follows): around it.
+          caution, offset, around = 0.3, lateral > 0 and -0.75 or 0.75, true
+        elseif ahead > 0 and ahead < 250 and hrai.still[b.i] and now - hrai.still[b.i] > 4 then
           -- Local yellow (a car standing still 4 s or more): slow, careful, away from it.
           caution, throttle = math.max(caution, 1.8), math.min(throttle, 0.85)
           if ahead < 80 then offset = lateral > 0 and -0.5 or 0.5 end
@@ -1631,7 +1668,7 @@ local function hraiTick(now)
     pcall(physics.setExtraAIGrip, i, grip)
     pcall(physics.setAIThrottleLimit, i, throttle)
     try(physics, 'setAICaution', i, caution)
-    try(physics, 'setAISplineOffset', i, math.clamp(offset, -0.8, 0.8), false)
+    try(physics, 'setAISplineOffset', i, math.clamp(offset, -0.8, 0.8), around)
   end
 end
 
@@ -2587,14 +2624,38 @@ local function runSafetyCar(dt)
       safetyGuard.held[scIndex], safetyGuard.parked[scIndex] = nil, nil
       try(physics, 'setAINoInput', scIndex, false)
       try(physics, 'setAIPitStopRequest', scIndex, false)
-      if try(physics, 'setCarPosition', scIndex, pos, nil) then try(physics, 'setCarVelocity', scIndex, vec3(0, 0, 0)) end
+      if try(physics, 'setCarPosition', scIndex, pos, nil) then
+        -- Already rolling along the racing line (an AI car placed at a standstill out of its pit box can sit there).
+        local ok2, ahead = try(ac, 'trackProgressToWorldCoordinate', ((leader.splinePosition or 0) + 820 / len) % 1)
+        local dir = ok2 and ahead and ahead:clone():sub(pos) or nil
+        if dir and dir:length() > 1 then
+          try(physics, 'setCarVelocity', scIndex, dir:normalize():scale(SC_KMH / 3.6 * 0.6))
+        else
+          try(physics, 'setCarVelocity', scIndex, vec3(0, 0, 0))
+        end
+      end
+      try(physics, 'awakeCar', scIndex)
       try(physics, 'setAILevel', scIndex, 1)
-      scm.phase, scm.placedAt, scm.going, scm.virtual = 'lead', now, false, false
+      scm.phase, scm.placedAt, scm.going, scm.virtual, scm.noted = 'lead', now, false, false, false
     end
   end
   if sc and not scm.virtual and scm.phase ~= 'green' then try(physics, 'preventAIFromRetiring', scIndex) end
   if scm.phase == 'lead' and not scm.virtual and sc then
     if (sc.speedKmh or 0) > 30 then scm.going = true end
+    if not scm.going then
+      try(physics, 'setAINoInput', scIndex, false)
+      try(physics, 'setAIStopCounter', scIndex, 0)
+      try(physics, 'setAITimeToStart', scIndex, 0)
+      try(physics, 'setAIPitStopRequest', scIndex, false)
+      try(physics, 'awakeCar', scIndex)
+      if now - (scm.placedAt or now) > 4 and not scm.noted then
+        scm.noted = true
+        journal(string.format('Safety Car not moving 4 s after placing: gear %s, %d rpm, gas %.2f, brake %.2f, %s%s%s',
+          tostring(field(sc, 'gear')), field(sc, 'rpm') or 0, field(sc, 'gas') or 0, field(sc, 'brake') or 0,
+          field(sc, 'isInPitlane') and 'in the pit lane' or 'on track', field(sc, 'isRetired') and ', RETIRED' or '',
+          field(sc, 'isAIControlled') and '' or ', not AI'))
+      end
+    end
     local leaderOnIt = now - (scm.placedAt or now) > 1
       and progressDelta(sc.splinePosition or 0, leader.splinePosition or 0) * len < 150
     if not scm.going and (now - (scm.placedAt or now) > 10 or leaderOnIt) then
