@@ -1260,7 +1260,7 @@ local function rescueStuck(i, c, step)
   -- AC doesn't count the lap of a car that jumps from one place to another after the first part of the lap (seen in
   -- the journal: moved at 0.2, counted; at 0.39 or 0.8, not, with setCarPosition or setAICarPosition alike). Pulled
   -- back onto the track it never jumps: so it's towed first, and moved only if the tow doesn't work.
-  if not s.towTried and has(physics, 'addForce') then
+  if not s.towTried and has(physics, 'addForce') and (field(c, 'wheelsOutside') or 0) > 0 then
     s.towTried = true
     tows[i] = { since = clock(), k = 4, why = why }
     journal(string.format('towing back onto the track after %s: %s', why, carLabel(i)))
@@ -1297,8 +1297,9 @@ local function rescueStuck(i, c, step)
   return false
 end
 
--- Pulls a towed car towards the racing line 20 m ahead (inputs off, so it isn't braking against it), with a force
--- that grows while it doesn't move and eases off once it does; done when all four wheels are back on the track, given
+-- Pulls a towed car towards the racing line 20 m ahead, with a force that grows while it doesn't move (it may be
+-- braking against it) and eases off once it does. Never with the AI's inputs switched off: a car that has had them
+-- off sits in neutral at full throttle afterwards and never drives off again (seen in the journal); done when all four wheels are back on the track, given
 -- up after 15 s (then it's moved, as before).
 local function towTick(dt)
   local sim = ac.getSim()
@@ -1309,7 +1310,6 @@ local function towTick(dt)
     local onTrack = c and (field(c, 'wheelsOutside') or 0) == 0 and now - t.since > 1
     if not c or not sim.isSessionStarted or onTrack or now - t.since > 15 then
       tows[i] = nil
-      try(physics, 'setAINoInput', i, false)
       movedAt[i] = now
       if c and onTrack then
         journal(string.format('towed back onto the track: %s, in %.0f s', carLabel(i), now - t.since))
@@ -1330,7 +1330,6 @@ local function towTick(dt)
           local mass = field(c, 'mass') or 700
           local force = dir:scale(mass * t.k)
           force.y = mass * t.k * 0.3 -- (a little lift: less of it dug into the gravel)
-          try(physics, 'setAINoInput', i, true)
           try(physics, 'addForce', i, c.position, false, force, false)
         end
       end
@@ -2547,11 +2546,19 @@ end
 -- Assetto Corsa would race it like any other AI car.
 local safetyGuard = { timer = 0, session = -1, startedAt = nil, seenInPits = {}, racing = {}, parked = {}, held = {}, noted = false }
 
--- Parks it: held where it stands at once (no AI input, so it never pulls away), then, once the session has been
+-- Parks it: held where it stands at once (no throttle, so it never pulls away), then, once the session has been
 -- running 5 s and the field has left it behind, put straight into its pit box (physics.setCarPosition to the car's
 -- pit position). Never with physics.teleportCarTo: that runs AC's own "spawn in the pits" routine, and run during a
 -- session it leaves the pit crews standing round the cars out on track. A CSP without setCarPosition or the pit
 -- position lets it drive into the pits instead, and holds it there.
+-- Held where it stands: no throttle and no top speed. (Never by switching the AI's inputs off: a car that has had
+-- them off sits in neutral at full throttle afterwards and never drives off, which is what stopped the Safety Car.)
+local function holdCar(i, on)
+  local ok = try(physics, 'setAIThrottleLimit', i, on and 0 or 1)
+  try(physics, 'setAITopSpeed', i, on and 0 or 1e9)
+  return ok
+end
+
 local function parkSafetyCar(i, c, why)
   local p = safetyGuard.parked[i]
   if not p then
@@ -2571,7 +2578,7 @@ local function parkSafetyCar(i, c, why)
       if vec3 then try(physics, 'setCarVelocity', i, vec3(0, 0, 0)) end
     else
       p.driving = true
-      if try(physics, 'setAINoInput', i, false) then safetyGuard.held[i] = nil end
+      if holdCar(i, false) then safetyGuard.held[i] = nil end
       try(physics, 'setAIPitStopRequest', i, true)
     end
   end
@@ -2579,7 +2586,7 @@ local function parkSafetyCar(i, c, why)
   try(physics, 'preventAIFromRetiring', i)
   -- Driving to the pits: held once it's in its pit box. Otherwise held from the first moment.
   if p.driving and not field(c, 'isInPit') then return end
-  if try(physics, 'setAINoInput', i, true) then safetyGuard.held[i] = true end
+  if holdCar(i, true) then safetyGuard.held[i] = true end
 end
 
 local function guardSafetyCar(dt)
@@ -2705,7 +2712,8 @@ local function runSafetyCar(dt)
     local ok, pos = try(ac, 'trackProgressToWorldCoordinate', ((leader.splinePosition or 0) + 800 / len) % 1)
     if ok and pos and (hiddenFromCamera(scIndex, pos) or scm.placeTries > 20) and clearOf(pos, scIndex) then
       safetyGuard.held[scIndex], safetyGuard.parked[scIndex] = nil, nil
-      try(physics, 'setAINoInput', scIndex, false)
+      holdCar(scIndex, false)
+      try(physics, 'setAINoInput', scIndex, false) -- (in case an older version held it that way)
       try(physics, 'setAIPitStopRequest', scIndex, false)
       if try(physics, 'setCarPosition', scIndex, pos, nil) then
         -- Already rolling along the racing line (an AI car placed at a standstill out of its pit box can sit there).
