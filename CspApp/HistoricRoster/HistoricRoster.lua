@@ -1202,10 +1202,23 @@ end
 -- 250 m from the camera at both ends. Only once it has been racing (a race session counts as started while the grid
 -- still waits for the lights), and never across the finish line (the lap it was on wouldn't count).
 local stuckCars = {}
+local movedAt = {} -- car index -> when Historic Roster last moved it (its sudden change of speed isn't an incident)
 local function hiddenFromCamera(i, pos)
   if i == watch.target or i == watch.partner or pos == nil then return false end
   local ok, cam = try(ac, 'getCameraPosition')
   return ok and cam ~= nil and pos:distance(cam) > 250
+end
+
+-- A car that can't get going after a tangle is usually broken (suspension, gearbox): repaired as it's put back, out of
+-- shot. A real finisher wasn't crippled, and a car that really retired goes to the pits as in real life anyway.
+local function repairCar(i, c)
+  try(physics, 'setSuspensionDamage', i, nil, 0)
+  if vec4 then try(physics, 'setCarBodyDamage', i, vec4(0, 0, 0, 0)) end
+  local gearbox = field(c, 'gearboxDamage')
+  if gearbox and gearbox > 0.2 then
+    local fuel, maxFuel = field(c, 'fuel'), field(c, 'maxFuel')
+    try(physics, 'resetCarState', i, fuel and maxFuel and maxFuel > 0 and fuel / maxFuel or 0.5)
+  end
 end
 
 local function rescueStuck(i, c, step)
@@ -1239,7 +1252,11 @@ local function rescueStuck(i, c, step)
       end
       if clear then
         journal(string.format('put back on track after %s: %s, %d m on', why, carLabel(i), k * 10))
-        if try(physics, 'setCarPosition', i, pos, nil) then try(physics, 'setCarVelocity', i, vec3(0, 0, 0)) end
+        if try(physics, 'setCarPosition', i, pos, nil) then
+          try(physics, 'setCarVelocity', i, vec3(0, 0, 0))
+          repairCar(i, c)
+        end
+        movedAt[i] = clock()
         return true
       end
     end
@@ -1296,7 +1313,7 @@ local function reorderOffCamera(want)
           if try(physics, 'setCarPosition', b.i, pos, nil) then
             try(physics, 'setCarVelocity', b.i, dir:clone():scale((a.c.speedKmh or 0) / 3.6))
           end
-          reorder.at, reorder.last[b.i] = now, now
+          reorder.at, reorder.last[b.i], movedAt[b.i] = now, now, now
           return
         end
       end
@@ -1503,27 +1520,35 @@ local function hasSpline() return trackLen() > 100 end
 -- Assetto Corsa's own AI drives every car (no app can replace it: it follows the racing line, brakes and steers);
 -- this works on top of it every half second, in a watched race, for every AI car:
 --  * every car runs the same, slightly higher extra grip (GRIP_BASE): fewer spins and offs, nobody quicker;
---  * danger points: where cars spin or lose most of their speed at once, twice, the track has a danger point. Cars
---    coming up to one (from 200 m before to 50 m after) drive with more caution and less throttle, and a little
---    more grip. What's learnt is kept per track and layout, so the next race there starts knowing it;
+--  * danger points: where three different cars spin or lose most of their speed at once, the track has a danger
+--    point (never counting a car Historic Roster has just moved, and at most 10 per track). Cars coming up to one
+--    (from 200 m before to 50 m after) drive with more caution and less throttle. What's learnt is kept per track and
+--    layout, so the next race there starts knowing it;
 --  * blue flags: a car about to be lapped (a car a lap or more ahead within 60 m behind it) moves aside, away from
 --    that car, and lifts a little until it's by;
 --  * wheel to wheel: two cars side by side are nudged apart, so they don't touch;
 --  * and the real-result steering's pace for each car (AI level, grip, throttle), applied together with all that.
-local hrai = { loaded = false, nbins = 1, danger = {}, seen = {}, last = {}, store = nil }
+local hrai = { loaded = false, nbins = 1, danger = {}, seen = {}, last = {}, counted = {}, points = 0, store = nil }
 local DANGER_BIN = 25  -- metres of track per danger counter
-local DANGER_COUNT = 2 -- incidents at one point that make it a danger point
+local DANGER_COUNT = 3 -- cars with an incident at one point that make it a danger point
+local DANGER_MAX = 10  -- danger points per track at most
 
 local function hraiLoad()
   hrai.loaded = true
   hrai.nbins = math.max(1, math.floor(trackLen() / DANGER_BIN))
   local okT, track = try(ac, 'getTrackID')
   local okL, layout = try(ac, 'getTrackLayout')
-  local ok, stored = try(ac, 'storage', 'hrai.danger.' .. tostring(okT and track or '') .. '.' .. tostring(okL and layout or ''), '')
+  local ok, stored = try(ac, 'storage', 'hrai.danger2.' .. tostring(okT and track or '') .. '.' .. tostring(okL and layout or ''), '')
   if ok and stored then
     hrai.store = stored
     local okG, text = pcall(function() return stored:get() end)
-    for b, n in tostring(okG and text or ''):gmatch('(%d+):(%d+)') do hrai.danger[tonumber(b)] = tonumber(n) end
+    for b, n in tostring(okG and text or ''):gmatch('(%d+):(%d+)') do
+      b, n = tonumber(b), tonumber(n)
+      if n < DANGER_COUNT or hrai.points < DANGER_MAX then
+        hrai.danger[b] = n
+        if n >= DANGER_COUNT then hrai.points = hrai.points + 1 end
+      end
+    end
   end
 end
 
@@ -1543,14 +1568,23 @@ local function hraiIncident(i, c, now)
   local spun = yaw > 1.4 and speed > 25
   local lost = s.speed > 70 and speed < s.speed * 0.4
   s.speed = speed
-  if (spun or lost) and now - (hrai.last[i] or -1e9) > 15 then
+  if (spun or lost) and now - (hrai.last[i] or -1e9) > 15 and now - (movedAt[i] or -1e9) > 15 then
     hrai.last[i] = now
     local b = math.floor((c.splinePosition or 0) * hrai.nbins) % hrai.nbins
-    hrai.danger[b] = (hrai.danger[b] or 0) + 1
-    if hrai.danger[b] == DANGER_COUNT then
+    -- Each car counts once per point and race: one car spinning there again and again doesn't make it dangerous.
+    local key = b .. ':' .. i
+    if hrai.counted[key] then return end
+    hrai.counted[key] = true
+    local n = hrai.danger[b] or 0
+    if n + 1 >= DANGER_COUNT and n < DANGER_COUNT then
+      if hrai.points >= DANGER_MAX then return end
+      hrai.points = hrai.points + 1
+      hrai.danger[b] = n + 1
       journal(string.format('danger point learnt at %.0f m (%s)', b * DANGER_BIN, spun and 'spins' or 'sudden stops'))
-      hraiSave()
+    else
+      hrai.danger[b] = n + 1
     end
+    hraiSave()
   end
 end
 
