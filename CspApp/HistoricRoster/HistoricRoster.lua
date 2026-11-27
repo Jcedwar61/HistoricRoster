@@ -1566,7 +1566,7 @@ local function hraiLoad()
   hrai.nbins = math.max(1, math.floor(trackLen() / DANGER_BIN))
   local okT, track = try(ac, 'getTrackID')
   local okL, layout = try(ac, 'getTrackLayout')
-  local ok, stored = try(ac, 'storage', 'hrai.danger2.' .. tostring(okT and track or '') .. '.' .. tostring(okL and layout or ''), '')
+  local ok, stored = try(ac, 'storage', 'hrai.danger3.' .. tostring(okT and track or '') .. '.' .. tostring(okL and layout or ''), '')
   if ok and stored then
     hrai.store = stored
     local okG, text = pcall(function() return stored:get() end)
