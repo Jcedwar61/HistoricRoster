@@ -8,7 +8,8 @@ namespace HistoricRosterPlugin;
 ///   and never sends a stuck car to its pit box (the in-game app puts it back on track, out of shot);
 /// - never penalises the user's car (CAR_0): the autopilot drives it in place of the real driver, can't serve a
 ///   penalty (a drive-through would need AC's pit menu) and would be disqualified for it;
-/// - shows no on-screen panel, flags or messages for the user's car: a watched race has no driver.
+/// - shows no on-screen panel, flags, messages or beeps for the user's car: a watched race has no driver;
+/// - leaves each car's pace (AI level, grip, throttle) to the in-game app's real-result steering.
 /// Each change is an exact text replacement, applied once (the originals are kept as *.hr-orig). When AdvancedIA's code
 /// has changed (an update), nothing is patched and the result says so.
 /// </summary>
@@ -57,6 +58,10 @@ public static class AdvancedIaPatch
                           "elseif a.player and a.valid and p.sanPlayerTrackLimits and not HR.watched() and not a.finished and not c.dq then"),
         ("src/engine.lua", "if K.recoverRetire and e.profile=='C' and cmd.recover",
                        "if K.recoverRetire and not HR.watched() and e.profile=='C' and cmd.recover"),
+        // Each car's pace (AI level, grip, throttle) belongs to the in-game app's real-result steering; AdvancedIA still
+        // drives (lines, overtaking, aggression) and enforces the rules (speed limits under yellow).
+        ("src/applier.lua", "local function write(name,index,value,extra)\r\n if name=='turnSignals' then",
+                            "local function write(name,index,value,extra)\r\n if HR.watched() and (name=='level' or name=='grip' or name=='throttle') then return true end\r\n if name=='turnSignals' then"),
         // A stuck car isn't sent to its pit box (a lap lost): the in-game app puts it back on track, out of shot.
         ("src/engine.lua", "cmd.recover=not a.pit and (red and still>=K.redRecoverTime",
                            "cmd.recover=not HR.watched() and not a.pit and (red and still>=K.redRecoverTime"),

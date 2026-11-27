@@ -1202,6 +1202,46 @@ local function rescueStuck(i, c, step)
   return false
 end
 
+-- No other car within 25 m of a spot.
+local function clearOf(pos, i)
+  local sim = ac.getSim()
+  for j = 0, sim.carsCount - 1 do
+    local other = j ~= i and ac.getCar(j)
+    if other and other.position and other.position:distance(pos) < 25 then return false end
+  end
+  return true
+end
+
+-- From half distance, the real order is restored where nobody sees it: when a car that finished ahead in real life
+-- runs behind one that finished behind it, on the same lap, and neither is in shot, it's moved 40 m ahead of that car
+-- along the racing line, at that car's speed (so it doesn't hold it up). Never across the finish line (the lap
+-- wouldn't count) and never a car a lap down (AC ranks by completed laps, which nothing can set). One move every
+-- 3 s, the same car at most every 20 s, so the race still looks like a race.
+local reorder = { at = -1e9, last = {} }
+local function reorderOffCamera(want)
+  local now = clock()
+  if now - reorder.at < 3 then return end
+  local len = math.max(field(ac.getSim(), 'trackLengthM') or 5000, 500)
+  for k = 1, #want - 1 do
+    local a, b = want[k], want[k + 1] -- a must be ahead of b
+    if (a.c.lapCount or 0) == (b.c.lapCount or 0) and lapsRun(a.c, a.e) < lapsRun(b.c, b.e)
+      and now - (reorder.last[a.i] or -1e9) > 20 and not field(a.c, 'isInPitlane') and not field(b.c, 'isInPitlane')
+      and hiddenFromCamera(a.i, a.c.position) and hiddenFromCamera(b.i, b.c.position) then
+      local target = (b.c.splinePosition or 0) + 40 / len
+      if target < 0.995 and target > (a.c.splinePosition or 0) then
+        local ok, pos = try(ac, 'trackProgressToWorldCoordinate', target)
+        if ok and pos and hiddenFromCamera(a.i, pos) and clearOf(pos, a.i) then
+          if try(physics, 'setCarPosition', a.i, pos, nil) and b.c.velocity then
+            try(physics, 'setCarVelocity', a.i, b.c.velocity)
+          end
+          reorder.at, reorder.last[a.i] = now, now
+          return
+        end
+      end
+    end
+  end
+end
+
 local function releaseCar(i, e)
   pcall(physics.setAIThrottleLimit, i, 1)
   pcall(physics.setExtraAIGrip, i, 1.2)
@@ -1300,6 +1340,7 @@ local function steerToRealResult(step)
     end
     pcall(physics.disableCarCollisions, r.i, final and err ~= 0 and hidden)
   end
+  if progress > 0.5 then reorderOffCamera(want) end
 end
 
 local function releaseAll()

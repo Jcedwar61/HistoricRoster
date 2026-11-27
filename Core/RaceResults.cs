@@ -170,7 +170,9 @@ public static class RaceOutReader
             return null;
         }
         if (order.Count == 0 || names.Count < 2) return null;
-        if (race.TrackFolder.Length > 0 && track.Length > 0 && !track.Equals(race.TrackFolder, StringComparison.OrdinalIgnoreCase)) return null;
+        // AC writes "folder-layout" for a track with layouts ("ks_barcelona-layout_gp").
+        if (race.TrackFolder.Length > 0 && track.Length > 0 && !track.Equals(race.TrackFolder, StringComparison.OrdinalIgnoreCase)
+            && !track.StartsWith(race.TrackFolder + "-", StringComparison.OrdinalIgnoreCase)) return null;
 
         var byName = roster.Entries.GroupBy(e => e.Driver, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         var known = names.Skip(1).Count(byName.ContainsKey);
