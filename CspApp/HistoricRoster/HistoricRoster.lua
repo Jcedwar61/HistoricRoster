@@ -1505,6 +1505,21 @@ local function steerToRealResult(step)
     end
   end
 
+  -- Letting a car by: a car due to finish behind one that is right behind it (within 120 m) with ground to make up
+  -- drops to the lowest AI level until it's past, and out of shot the two can't tangle. AC's AI rarely gets past a car
+  -- of the same pace, so a car the field was waiting for stayed stuck behind the very pack that waited for it.
+  local len = math.max(field(sim, 'trackLengthM') or 5000, 500)
+  local letBy = {}
+  for rank, r in ipairs(running) do
+    if (catchUp[r.i] or 0) > 0 or real.lost[r.i] or rank > wantRank[r.i] then
+      local mine = lapsRun(r.c, r.e)
+      for _, b in ipairs(running) do
+        local d = (lapsRun(b.c, b.e) - mine) * len
+        if b.i ~= r.i and d > 0 and d < 120 and wantRank[b.i] > wantRank[r.i] then letBy[b.i] = true end
+      end
+    end
+  end
+
   for rank, r in ipairs(running) do
     local err = rank - wantRank[r.i] -- > 0: too far back, < 0: too far forward
     if err ~= 0 then real.outOfPlace = real.outOfPlace + 1 end
@@ -1522,6 +1537,7 @@ local function steerToRealResult(step)
     if wait > 0 then slower = math.max(slower, 0.04 + 0.08 * wait) end
     if final and err < 0 then slower = math.max(slower, 0.02 * -err) end
     p.level = math.clamp(base + 0.01 * strength * err + 0.6 * catch - math.min(slower, 0.12), 0.75, 1.0)
+    if letBy[r.i] then p.level = 0.75 end
     -- Grip only ever goes up (for cars too far back): with less grip than it expects, AC's AI brakes too late and goes
     -- off. Cars too far forward are held back by AI level and the throttle.
     p.grip = math.clamp(GRIP_BASE + 0.015 * strength * math.max(err, 0) + 1.0 * catch, GRIP_BASE, GRIP_BASE + 0.12)
@@ -1534,7 +1550,7 @@ local function steerToRealResult(step)
       local okCam, cam = try(ac, 'getCameraPosition')
       hidden = okCam and cam ~= nil and r.c.position ~= nil and r.c.position:distance(cam) > 250
     end
-    pcall(physics.disableCarCollisions, r.i, progress > 0.5 and err ~= 0 and hidden)
+    pcall(physics.disableCarCollisions, r.i, (progress > 0.5 and err ~= 0 or letBy[r.i] == true) and hidden)
   end
 
   -- The running order, every 30 s.
