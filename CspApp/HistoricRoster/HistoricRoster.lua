@@ -1202,9 +1202,11 @@ local function lapsRun(c, e)
 end
 
 -- A car stuck on track after a spin or a tangle loses laps that no steering gives back (AC ranks by completed laps,
--- and nothing can set them). So after 8 s standing still on track, or 12 s getting nowhere (beached in the gravel,
--- going round in circles, reversing: less than 40 m along the track; not in the first minute, when the back of the
--- grid queues for the first corner), it's put back on the racing line where it was, at
+-- and nothing can set them). But moving a car costs it the lap it's on too: AC doesn't count a lap during which a
+-- car was moved. AC's AI gets going again by itself after most spins, so only a car that really can't is moved: after
+-- 30 s standing still on track, or 45 s getting nowhere (beached in the gravel, going round in circles, reversing:
+-- less than 40 m along the track; not in the first minute, when the back of the grid queues for the first corner),
+-- it's put back on the racing line where it was, at
 -- a spot with no car within 25 m. Only where nobody sees it: never the car being filmed or its rival, and more than
 -- 250 m from the camera at both ends. Only once it has been racing (a race session counts as started while the grid
 -- still waits for the lights), and never across the finish line (the lap it was on wouldn't count).
@@ -1237,15 +1239,19 @@ local function rescueStuck(i, c, step)
   if (c.speedKmh or 0) > 40 then s.raced = true end
   -- (A car still standing 20 s after the start never got going: it's rescued too.)
   local going = s.raced or clock() - s.startAt > 20
-  if not going or field(c, 'isInPitlane') then s.still, s.mark = 0, nil return false end
+  if not going or field(c, 'isInPitlane') then s.still, s.mark, s.lastS = 0, nil, nil return false end
   local len = math.max(field(sim, 'trackLengthM') or 5000, 500)
-  local run = (c.lapCount or 0) + (c.splinePosition or 0)
-  if not s.mark or run - s.mark > 40 / len then s.mark, s.markAt = run, clock() end
-  local nowhere = clock() - s.markAt > 12 and clock() - s.startAt > 60
+  -- Distance driven along the track (from the position on it alone: a lap AC didn't count doesn't look like going back).
+  local sp = c.splinePosition or 0
+  local d = s.lastS and (sp - s.lastS) % 1 or 0
+  if d > 0.5 then d = d - 1 end
+  s.lastS, s.dist = sp, (s.dist or 0) + d
+  if not s.mark or s.dist - s.mark > 40 / len then s.mark, s.markAt = s.dist, clock() end
+  local nowhere = clock() - s.markAt > 45 and clock() - s.startAt > 60
   if (c.speedKmh or 0) >= 5 and not nowhere then s.still = 0 return false end
   s.still = s.still + step
-  if (s.still < 8 and not nowhere) or not hiddenFromCamera(i, c.position) then return false end
-  local why = s.still >= 8 and 'standing still 8 s' or 'getting nowhere for 12 s'
+  if (s.still < 30 and not nowhere) or not hiddenFromCamera(i, c.position) then return false end
+  local why = s.still >= 30 and 'standing still 30 s' or 'getting nowhere for 45 s'
   s.still, s.mark = 0, nil
   local here = c.splinePosition or 0
   for _, k in ipairs({ 1, 2, 3, 4, 6, 8, 10, 12, -2, -4, -6, -8 }) do
@@ -1279,53 +1285,6 @@ local function clearOf(pos, i)
     if other and other.position and other.position:distance(pos) < 25 then return false end
   end
   return true
-end
-
--- From half distance, the real order is restored where nobody sees it: when a car runs ahead of one that finished
--- ahead of it in real life, on the same lap, and neither is in shot, it's put back 40 m behind that car, along the
--- racing line, at that car's speed. Always backwards: AC doesn't count a lap a car didn't drive, so moving a car
--- forward would cost it the lap; put back, it just drives part of its lap again. Never back across the start line
--- (the lap it completed would count twice), never a car a lap down (AC ranks by completed laps, which nothing can
--- set), only on a straight. One move every 3 s, the same car at most every 20 s, so the race still looks like a race.
-local reorder = { at = -1e9, last = {} }
-local function reorderOffCamera(want)
-  local now = clock()
-  if now - reorder.at < 3 then return end
-  local len = math.max(field(ac.getSim(), 'trackLengthM') or 5000, 500)
-  for k = 1, #want - 1 do
-    -- a must be ahead of every car after it in the real order: b is the furthest ahead of those running in front of
-    -- it on the same lap, and the one put back.
-    local a, b = want[k], nil
-    local pa = lapsRun(a.c, a.e)
-    for m = k + 1, #want do
-      local x = want[m]
-      if (x.c.lapCount or 0) == (a.c.lapCount or 0) and lapsRun(x.c, x.e) > pa
-        and (b == nil or lapsRun(x.c, x.e) > lapsRun(b.c, b.e)) then b = x end
-    end
-    if b and now - (reorder.last[b.i] or -1e9) > 20 and not field(a.c, 'isInPitlane') and not field(b.c, 'isInPitlane')
-      and hiddenFromCamera(a.i, a.c.position) and hiddenFromCamera(b.i, b.c.position) then
-      local target = (a.c.splinePosition or 0) - 40 / len
-      if target > 0.01 and target < (b.c.splinePosition or 0) then
-        local ok, pos = try(ac, 'trackProgressToWorldCoordinate', target)
-        -- Only on a straight (the line turns less than 9 degrees over the next 60 m): put in a corner at the speed of
-        -- a car on a straight, it would go straight off.
-        local ahead = ok and pos and ac.trackProgressToWorldCoordinate(math.min(target + 60 / len, 0.999))
-        local back = ok and pos and ac.trackProgressToWorldCoordinate(math.max(target - 5 / len, 0))
-        local dir = ahead and back and ahead:clone():sub(pos):normalize()
-        local straight = dir and back and math.acos(math.clamp(dir:dot(pos:clone():sub(back):normalize()), -1, 1)) < 0.15
-        if straight and hiddenFromCamera(b.i, pos) and clearOf(pos, b.i) then
-          journal(string.format('real order: %s (real P%d) put back 40 m behind %s (real P%d)', carLabel(b.i), b.e.pos or 0,
-            carLabel(a.i), a.e.pos or 0))
-          -- At the speed of the car it now follows, along the racing line.
-          if try(physics, 'setCarPosition', b.i, pos, nil) then
-            try(physics, 'setCarVelocity', b.i, dir:clone():scale((a.c.speedKmh or 0) / 3.6))
-          end
-          reorder.at, reorder.last[b.i], movedAt[b.i] = now, now, now
-          return
-        end
-      end
-    end
-  end
 end
 
 local function releaseCar(i, e)
@@ -1495,16 +1454,16 @@ local function steerToRealResult(step)
     -- (A light hold for a car just ahead of the one it waits for, 70 % throttle once it's a lap or more ahead.)
     if wait > 0 then p.throttle = math.min(p.throttle, math.clamp(0.95 - 0.25 * wait, 0.7, 0.95)) end
     if final and err < 0 then p.throttle = math.min(p.throttle, math.clamp(0.9 + 0.06 * err, 0.55, 0.9)) end
-    -- Cars out of place may pass through each other late in the race, but only where nobody sees it: never the car
-    -- being filmed or its rival, and only more than 250 m from the camera.
+    -- From half distance, cars out of place may pass through each other, but only where nobody sees it: never the car
+    -- being filmed or its rival, and only more than 250 m from the camera. (No car is moved to restore the order: AC
+    -- doesn't count a lap during which a car was moved.)
     local hidden = r.i ~= watch.target and r.i ~= watch.partner
     if hidden then
       local okCam, cam = try(ac, 'getCameraPosition')
       hidden = okCam and cam ~= nil and r.c.position ~= nil and r.c.position:distance(cam) > 250
     end
-    pcall(physics.disableCarCollisions, r.i, final and err ~= 0 and hidden)
+    pcall(physics.disableCarCollisions, r.i, progress > 0.5 and err ~= 0 and hidden)
   end
-  if progress > 0.5 then reorderOffCamera(want) end
 
   -- The running order, every 30 s.
   if clock() - (real.snapshotAt or -1e9) > 30 then
@@ -2631,7 +2590,8 @@ local function runSafetyCar(dt)
   if sc and not scm.virtual and scm.phase ~= 'green' then try(physics, 'preventAIFromRetiring', scIndex) end
   if scm.phase == 'lead' and not scm.virtual and sc then
     if (sc.speedKmh or 0) > 30 then scm.going = true end
-    local leaderOnIt = progressDelta(sc.splinePosition or 0, leader.splinePosition or 0) * len < 150
+    local leaderOnIt = now - (scm.placedAt or now) > 1
+      and progressDelta(sc.splinePosition or 0, leader.splinePosition or 0) * len < 150
     if not scm.going and (now - (scm.placedAt or now) > 10 or leaderOnIt) then
       -- It isn't moving: back to its pit box (the guard parks it once it isn't ours), and a virtual Safety Car.
       scm.virtual, scm.car = true, nil

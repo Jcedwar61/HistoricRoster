@@ -541,11 +541,13 @@ when the race loads. Open the app from the apps sidebar for its **Watch** tab:
 **A watched race finishes as it did in real life.** The in-game app steers every car to its real
 finishing position: it nudges each car's pace (AI level, and extra grip for cars too far back; never
 less grip, which makes the AI go off) toward its real place among the cars still running, gently
-at first and firmly in the last quarter of the race. Then cars still out of place lose their
-collisions so they can get past cleanly, but only out of shot (never the car being filmed or its
-rival, and only far from the camera), and cars too far forward are held back. A car stuck on track
-after a spin is put back on the racing line where it was after 8 seconds, out of shot, so it
-doesn't lose laps, and no car that finished in real life is retired by AC. Cars that really retired go into the pits at the same point of the race (scaled to your
+at first and firmly in the last quarter of the race. From half distance, cars still out of place
+lose their collisions so they can get past cleanly, but only out of shot (never the car being
+filmed or its rival, and only far from the camera), and cars too far forward are held back. No car
+is ever moved to fix the order: AC doesn't count a lap during which a car was moved. A car that
+really can't get going (30 seconds standing still, or 45 seconds getting nowhere) is put back on
+the racing line where it was, out of shot, and repaired, and no car that finished in real life is
+retired by AC. Cars that really retired go into the pits at the same point of the race (scaled to your
 race length) and park there, and AC's own random AI retirements are switched off. The Watch tab
 shows how many cars are still out of their real place, and **Finish as in real life** turns it
 off. Nothing else needs to be installed or switched on: the in-game app drives the AI itself (see
