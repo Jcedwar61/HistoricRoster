@@ -1445,15 +1445,17 @@ local function steerToRealResult(step)
     local hold = catch > 0.02 and 0 or (holdBack[r.i] or 0) -- (never hold a car that is itself behind)
     local p = pace[r.i] or {}
     pace[r.i] = p
-    p.level = math.clamp(base + 0.01 * strength * err + 0.6 * catch, 0.6, 1.0)
+    -- Held back by AI level, never by capping the throttle: AC's AI doesn't see a throttle-capped car ahead coming and
+    -- runs into it, so a capped car in a pack is a moving chicane. Less AI level slows a car everywhere, smoothly.
+    local slower = 0
+    if hold > 0.02 then slower = math.max(slower, 0.15 * (hold - 0.02)) end
+    if wait > 0 then slower = math.max(slower, 0.04 + 0.08 * wait) end
+    if final and err < 0 then slower = math.max(slower, 0.02 * -err) end
+    p.level = math.clamp(base + 0.01 * strength * err + 0.6 * catch - math.min(slower, 0.12), 0.75, 1.0)
     -- Grip only ever goes up (for cars too far back): with less grip than it expects, AC's AI brakes too late and goes
     -- off. Cars too far forward are held back by AI level and the throttle.
     p.grip = math.clamp(GRIP_BASE + 0.015 * strength * math.max(err, 0) + 1.0 * catch, GRIP_BASE, GRIP_BASE + 0.12)
     p.throttle = 1
-    if hold > 0.02 then p.throttle = math.clamp(1 - 1.5 * (hold - 0.02), 0.7, 1) end
-    -- (A light hold for a car just ahead of the one it waits for, 70 % throttle once it's a lap or more ahead.)
-    if wait > 0 then p.throttle = math.min(p.throttle, math.clamp(0.95 - 0.25 * wait, 0.7, 0.95)) end
-    if final and err < 0 then p.throttle = math.min(p.throttle, math.clamp(0.9 + 0.06 * err, 0.55, 0.9)) end
     -- From half distance, cars out of place may pass through each other, but only where nobody sees it: never the car
     -- being filmed or its rival, and only more than 250 m from the camera. (No car is moved to restore the order: AC
     -- doesn't count a lap during which a car was moved.)
@@ -1515,7 +1517,7 @@ local function hasSpline() return trackLen() > 100 end
 --    that car, and lifts a little until it's by;
 --  * wheel to wheel: two cars side by side are nudged apart, so they don't touch;
 --  * and the real-result steering's pace for each car (AI level, grip, throttle), applied together with all that.
-local hrai = { loaded = false, nbins = 1, danger = {}, seen = {}, last = {}, counted = {}, points = 0, store = nil }
+local hrai = { loaded = false, nbins = 1, danger = {}, seen = {}, last = {}, counted = {}, points = 0, store = nil, still = {} }
 local DANGER_BIN = 25  -- metres of track per danger counter
 local DANGER_COUNT = 3 -- cars with an incident at one point that make it a danger point
 local DANGER_MAX = 10  -- danger points per track at most
@@ -1525,7 +1527,7 @@ local function hraiLoad()
   hrai.nbins = math.max(1, math.floor(trackLen() / DANGER_BIN))
   local okT, track = try(ac, 'getTrackID')
   local okL, layout = try(ac, 'getTrackLayout')
-  local ok, stored = try(ac, 'storage', 'hrai.danger3.' .. tostring(okT and track or '') .. '.' .. tostring(okL and layout or ''), '')
+  local ok, stored = try(ac, 'storage', 'hrai.danger4.' .. tostring(okT and track or '') .. '.' .. tostring(okL and layout or ''), '')
   if ok and stored then
     hrai.store = stored
     local okG, text = pcall(function() return stored:get() end)
@@ -1589,6 +1591,9 @@ local function hraiTick(now)
   local sim = ac.getSim()
   local len = trackLen()
   local racing = sim.isSessionStarted
+  if not racing then hrai.startedAt = nil elseif not hrai.startedAt then hrai.startedAt = now end
+  -- The first 30 s: the whole grid is slow and side by side, which is a start, not something to react to.
+  local settled = racing and now - hrai.startedAt > 30
   local cars = {}
   for i = 0, sim.carsCount - 1 do
     local c = ac.getCar(i)
@@ -1599,26 +1604,26 @@ local function hraiTick(now)
   end
   for _, a in ipairs(cars) do
     local i, c = a.i, a.c
-    if racing then hraiIncident(i, c, now) end
+    if settled then hraiIncident(i, c, now) end
+    hrai.still[i] = (c.speedKmh or 0) < 5 and (hrai.still[i] or now) or nil
     local p = pace[i] or {}
     local throttle, grip, caution, offset = p.throttle or 1, p.grip or GRIP_BASE, 1, 0
     local underSc = scActive()
     if underSc then caution, throttle = 2, 1 end
-    if racing and not underSc and dangerAhead(c) then caution, throttle, grip = 1.5, math.min(throttle, 0.85), grip + 0.04 end
+    if settled and not underSc and dangerAhead(c) then caution, throttle, grip = 1.5, math.min(throttle, 0.85), grip + 0.04 end
     local side = field(c, 'side')
     for _, b in ipairs(cars) do
-      if racing and not underSc and b.i ~= i and side and b.c.position and c.position then
+      if settled and not underSc and b.i ~= i and side and b.c.position and c.position then
         local ahead = progressDelta(b.c.splinePosition or 0, c.splinePosition or 0) * len -- metres b is ahead of a
         local lateral = b.c.position:clone():sub(c.position):dot(side)                   -- metres b is to a's side
-        if ahead > 0 and ahead < 250 and (b.c.speedKmh or 0) < 10 then
-          -- Local yellow: slow, careful, away from the stopped car.
+        if ahead > 0 and ahead < 250 and hrai.still[b.i] and now - hrai.still[b.i] > 4 then
+          -- Local yellow (a car standing still 4 s or more): slow, careful, away from it.
           caution, throttle = math.max(caution, 1.8), math.min(throttle, 0.85)
           if ahead < 80 then offset = lateral > 0 and -0.5 or 0.5 end
         elseif ahead < 0 and ahead > -60 and b.run - a.run > 0.5 then
-          offset = lateral > 0 and -0.6 or 0.6 -- (blue flag: away from the car lapping it)
-          throttle = math.min(throttle, 0.9)
+          offset = lateral > 0 and -0.35 or 0.35 -- (blue flag: a little away from the car lapping it)
         elseif math.abs(ahead) < 6 and math.abs(lateral) < 2.4 then
-          offset = offset + (lateral > 0 and -0.25 or 0.25) -- (side by side: apart)
+          offset = offset + (lateral > 0 and -0.15 or 0.15) -- (side by side: apart)
         end
       end
     end
