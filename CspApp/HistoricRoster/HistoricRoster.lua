@@ -2921,6 +2921,41 @@ local function startWatchedRace()
   end
 end
 
+-- A watched race is a broadcast: AC's pit screens never come up on it, but every car still pits as it would. CSP's
+-- quick pit-stop menu is switched off; the camera car (CAR_0, the "user" seat, driven by the AI) is the one car AC
+-- opens its pit menu for, waiting for someone to press a button. So once it's stopped in its pit box and the crew is
+-- done (or after 25 s), the button is pressed for it and it drives out. Should that ever fail to get it going, it's
+-- kept out of the pits (and fuelled) for the rest of the race instead, so it can't sit there.
+-- (Not a car going into the pits to retire as it did in real life: that one stays there.)
+local pitGuard = { pressedAt = -1e9, stoppedAt = nil, noted = false, noPits = false }
+local function guardPitMenus()
+  try(ac, 'disableQuickMenuPitstop', true)
+  local sim = ac.getSim()
+  local car = ac.getCar(0)
+  local e = real.cars[0]
+  if not car or not sim.isSessionStarted or userDriving() or not car.isAIControlled or (e and (e.pitting or e.retired)) then
+    return
+  end
+  if not field(car, 'isInPit') then pitGuard.stoppedAt, pitGuard.noted = nil, false return end
+  local now = clock()
+  pitGuard.stoppedAt = pitGuard.stoppedAt or now
+  local busy = field(car, 'isRefueling') == true or field(car, 'isChangingTyres') == true or field(car, 'isRepairing') == true
+  local waited = now - pitGuard.stoppedAt
+  if ((waited > 4 and not busy) or waited > 25) and now - pitGuard.pressedAt > 2 then
+    pitGuard.pressedAt = now
+    try(ac, 'tryToStart', true)
+    if not pitGuard.noted then
+      pitGuard.noted = true
+      journal(string.format('pit stop for the camera car: %s; its pit menu closed for it after %.0f s', carLabel(0), waited))
+    end
+  end
+  if waited > 45 and not pitGuard.noPits then
+    pitGuard.noPits = true
+    journal(string.format('the camera car pit menu could not be closed: %s is kept out of the pits for the rest of the race',
+      carLabel(0)))
+  end
+end
+
 function script.update(dt)
   -- Every offline session, watched or not.
   pcall(startWatchedRace)
@@ -2936,6 +2971,7 @@ function script.update(dt)
   end
   if not watch.on then return end
   local sim = ac.getSim()
+  pcall(guardPitMenus)
   if next(tows) then pcall(towTick, dt) end
 
   -- Every frame: the camera.
@@ -3007,10 +3043,10 @@ function script.update(dt)
     end
   end
 
-  -- The user's car (CAR_0) never pits while the AI drives it: AC opens its pit menu for that car and waits for you.
-  -- Kept fuelled instead, so it never has to. (Driving it yourself, you pit as usual.)
+  -- The user's car (CAR_0) while the AI drives it. (It pits like any other car: see guardPitMenus. Only if its pit menu
+  -- couldn't be closed once is it kept out of the pits and fuelled instead.)
   if car and not userDriving() and car.isAIControlled then
-    try(physics, 'setAIPitStopRequest', 0, false)
+    if pitGuard.noPits then try(physics, 'setAIPitStopRequest', 0, false) end
     -- AC wears the user's engine (over-revving on the grid and on downshifts) but never an AI car's: kept as new, so
     -- the real driver's car isn't the only one on the grid with a tired engine.
     local life = field(car, 'engineLifeLeft')
@@ -3018,7 +3054,7 @@ function script.update(dt)
     -- Stuck after a spin or a tangle: nothing else recovers the user's car, and AC never retires it.
     rescueStuck(0, car, step)
     local fuel, maxFuel = field(car, 'fuel'), field(car, 'maxFuel')
-    if fuel and maxFuel and maxFuel > 0 and fuel < maxFuel * 0.3 then try(physics, 'setCarFuel', 0, maxFuel) end
+    if pitGuard.noPits and fuel and maxFuel and maxFuel > 0 and fuel < maxFuel * 0.3 then try(physics, 'setCarFuel', 0, maxFuel) end
   end
 
   -- A watched race has no driver: none of AC's HUD for the user's car (fuel, damage, proximity radar, wrong way, the
