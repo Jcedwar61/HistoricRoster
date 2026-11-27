@@ -1450,6 +1450,27 @@ local function steerToRealResult(step)
         elseif real.lost[r.i] and excess < 0.1 then
           real.lost[r.i] = nil
         end
+      elseif k == 1 or not prev then
+        -- The real winner (nobody to follow): lost when a car due to finish behind it is half a lap or more ahead.
+        local mine, worst = lapsRun(r.c, r.e), 0
+        for m = k + 1, #want do
+          local x = want[m]
+          if x.e.pos > 0 then worst = math.max(worst, lapsRun(x.c, x.e) - mine) end
+        end
+        if worst >= 0.5 then
+          catchUp[r.i] = worst
+          for m = k + 1, #want do
+            local x = want[m]
+            local over = x.e.pos > 0 and lapsRun(x.c, x.e) - mine + 0.006 or 0
+            if over > 0 then waitFor[x.i] = math.max(waitFor[x.i] or 0, over) end
+          end
+          if not real.lost[r.i] then
+            real.lost[r.i] = true
+            journal(string.format('laps lost: %s is %.1f laps behind; the cars due to finish behind wait for it', carLabel(r.i), worst))
+          end
+        elseif real.lost[r.i] and worst < 0.1 then
+          real.lost[r.i] = nil
+        end
       end
       prev = r
     end
@@ -2477,6 +2498,8 @@ local function parkSafetyCar(i, c, why)
       try(physics, 'setAIPitStopRequest', i, true)
     end
   end
+  -- AC retires an AI car that stands still long enough, and a retired car never drives again: kept from it.
+  try(physics, 'preventAIFromRetiring', i)
   -- Driving to the pits: held once it's in its pit box. Otherwise held from the first moment.
   if p.driving and not field(c, 'isInPit') then return end
   if try(physics, 'setAINoInput', i, true) then safetyGuard.held[i] = true end
@@ -2518,8 +2541,11 @@ end
 --    SC_KMH; every car's top speed is held to the car ahead's (so nobody overtakes), cars further back can close up;
 --  * once nothing is stopped on the track and the leader has done 2 laps behind it: "Safety Car in this lap"; it
 --    heads for the pits, and when the leader crosses the line the race is green again;
---  * meanwhile the real-result steering and the race-craft's danger points and blue flags stand back.
+--  * meanwhile the real-result steering and the race-craft's danger points and blue flags stand back;
+--  * if the Safety Car hasn't got going 15 s after it's put on the track, it goes back to its pit box and the period
+--    runs as a virtual Safety Car instead: every car held to VSC_KMH where it is, nobody placed anywhere.
 local SC_KMH = 130
+local VSC_KMH = 160
 
 local function raceLeader()
   local best, bestPos = nil, 999
@@ -2597,7 +2623,18 @@ local function runSafetyCar(dt)
       try(physics, 'setAIPitStopRequest', scIndex, false)
       if try(physics, 'setCarPosition', scIndex, pos, nil) then try(physics, 'setCarVelocity', scIndex, vec3(0, 0, 0)) end
       try(physics, 'setAILevel', scIndex, 1)
-      scm.phase = 'lead'
+      scm.phase, scm.placedAt, scm.going, scm.virtual = 'lead', now, false, false
+    end
+  end
+  if sc and not scm.virtual and scm.phase ~= 'green' then try(physics, 'preventAIFromRetiring', scIndex) end
+  if scm.phase == 'lead' and not scm.virtual and sc then
+    if (sc.speedKmh or 0) > 30 then scm.going = true end
+    if not scm.going and now - (scm.placedAt or now) > 15 then
+      -- It isn't moving: back to its pit box (the guard parks it once it isn't ours), and a virtual Safety Car.
+      scm.virtual, scm.car = true, nil
+      try(physics, 'setAITopSpeed', scIndex, 1e9)
+      journal('the Safety Car didn\'t get going: virtual Safety Car instead')
+      scMessage('VIRTUAL SAFETY CAR', 'Virtual Safety Car: hold your gap.')
     end
   end
 
@@ -2609,7 +2646,10 @@ local function runSafetyCar(dt)
 
   -- The field behind it, in running order: no overtaking (each car held to the car ahead's speed), closing up.
   table.sort(order, function(a, b) return a.run > b.run end)
-  for k, r in ipairs(order) do
+  if scm.virtual then
+    for _, r in ipairs(order) do try(physics, 'setAITopSpeed', r.i, VSC_KMH) end
+  end
+  for k, r in ipairs(scm.virtual and {} or order) do
     local cap = SC_KMH + 70
     if k == 1 then
       local toSc = sc and scm.phase ~= 'out' and progressDelta(sc.splinePosition or 0, r.c.splinePosition or 0) * len
@@ -2620,19 +2660,20 @@ local function runSafetyCar(dt)
     end
     try(physics, 'setAITopSpeed', r.i, cap)
   end
-  if sc and scm.phase ~= 'out' then try(physics, 'setAITopSpeed', scIndex, SC_KMH) end
+  if sc and scm.phase ~= 'out' and not scm.virtual then try(physics, 'setAITopSpeed', scIndex, SC_KMH) end
 
   -- Laps behind it, and back to green.
   if (leader.lapCount or 0) > scm.leaderLap then scm.laps, scm.leaderLap = scm.laps + 1, leader.lapCount or 0 end
   if scm.phase == 'lead' and scm.laps >= 2 and onTrack == 0 and anywhere == 0 then
     scm.phase, scm.inLap = 'in', leader.lapCount or 0
-    scMessage('SAFETY CAR', 'Safety Car in this lap.')
+    scMessage(scm.virtual and 'VIRTUAL SAFETY CAR' or 'SAFETY CAR', scm.virtual and 'Virtual Safety Car ending.' or 'Safety Car in this lap.')
   elseif scm.phase == 'in' then
-    if sc and (sc.splinePosition or 0) > 0.85 then try(physics, 'setAIPitStopRequest', scIndex, true) end
+    if sc and not scm.virtual and (sc.splinePosition or 0) > 0.85 then try(physics, 'setAIPitStopRequest', scIndex, true) end
     if (leader.lapCount or 0) > scm.inLap then
       scRelease()
-      try(physics, 'setAIPitStopRequest', scIndex, true)
-      scm.phase, scm.since, scm.lastEnd = 'green', now, now
+      if not scm.virtual then try(physics, 'setAIPitStopRequest', scIndex, true) end
+      scm.phase, scm.since, scm.lastEnd = scm.virtual and 'idle' or 'green', now, now
+      scm.virtual = false
       scMessage('GREEN FLAG', 'Racing resumes.')
     end
   end
