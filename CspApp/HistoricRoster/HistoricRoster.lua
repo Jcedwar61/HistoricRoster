@@ -2961,6 +2961,40 @@ local function startWatchedRace()
   end
 end
 
+-- The end of a watched race: AC ends the session, and writes its result, once every car has crossed the line after the
+-- flag. A car parked for good (left in neutral in its pit box or beside it) would hold that up for ever, with nobody
+-- there to leave the session. So two minutes after the flag, once every car has either finished or stood still for a
+-- minute, the session is ended (as leaving it would: AC writes the result with each car where it is).
+local endGuard = { session = -1, flagAt = nil, still = {}, tries = 0, lastTry = -1e9 }
+local function endRaceWhenOver()
+  local sim = ac.getSim()
+  if sim.currentSessionIndex ~= endGuard.session then
+    endGuard.session, endGuard.flagAt, endGuard.still, endGuard.tries = sim.currentSessionIndex, nil, {}, 0
+  end
+  if sessionKind() ~= 'race' or not sim.isSessionStarted then return end
+  local now = clock()
+  local anyFinished, allDone = false, true
+  for i = 0, sim.carsCount - 1 do
+    local c = ac.getCar(i)
+    if c and isRaceCar(i) then
+      if field(c, 'isRaceFinished') then
+        anyFinished = true
+      else
+        endGuard.still[i] = (c.speedKmh or 0) < 5 and (endGuard.still[i] or now) or nil
+        if not endGuard.still[i] or now - endGuard.still[i] < 60 then allDone = false end
+      end
+    end
+  end
+  if not anyFinished then return end
+  endGuard.flagAt = endGuard.flagAt or now
+  if allDone and now - endGuard.flagAt > 120 and endGuard.tries < 3 and now - endGuard.lastTry > 30 then
+    endGuard.tries, endGuard.lastTry = endGuard.tries + 1, now
+    local _, ended = try(ac, 'tryToSkipSession')
+    journal(string.format('race over: every car has finished or stopped for good; session ended for the result (%s)',
+      ended and 'done' or 'AC refused'))
+  end
+end
+
 -- A watched race is a broadcast: AC's pit screens never come up on it, but every car still pits as it would. CSP's
 -- quick pit-stop menu is switched off; the camera car (CAR_0, the "user" seat, driven by the AI) is the one car AC
 -- parks in its pit box until someone presses the pit menu's button. So once it's stopped there and the crew is done (or
@@ -3031,6 +3065,7 @@ function script.update(dt)
   if not watch.on then return end
   local sim = ac.getSim()
   pcall(guardPitMenus)
+  pcall(endRaceWhenOver)
   if next(tows) then pcall(towTick, dt) end
 
   -- Every frame: the camera.
