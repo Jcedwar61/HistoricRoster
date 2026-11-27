@@ -1299,8 +1299,10 @@ end
 
 -- Pulls a towed car towards the racing line 20 m ahead, with a force that grows while it doesn't move (it may be
 -- braking against it) and eases off once it does. Never with the AI's inputs switched off: a car that has had them
--- off sits in neutral at full throttle afterwards and never drives off again (seen in the journal); done when all four wheels are back on the track, given
--- up after 15 s (then it's moved, as before).
+-- off sits in neutral at full throttle afterwards and never drives off again (seen in the journal). After 8 s without
+-- getting anywhere it's pulled straight across to the racing line instead (a car can be up against a barrier ahead).
+-- Done when all four wheels are back on the track; given up after 25 s (then it's moved, as before: costing it the lap
+-- if it's past the first part of it).
 local function towTick(dt)
   local sim = ac.getSim()
   local len = math.max(field(sim, 'trackLengthM') or 5000, 500)
@@ -1308,28 +1310,29 @@ local function towTick(dt)
     local c = ac.getCar(i)
     local now = clock()
     local onTrack = c and (field(c, 'wheelsOutside') or 0) == 0 and now - t.since > 1
-    if not c or not sim.isSessionStarted or onTrack or now - t.since > 15 then
+    if not c or not sim.isSessionStarted or onTrack or now - t.since > 25 then
       tows[i] = nil
       movedAt[i] = now
       if c and onTrack then
         journal(string.format('towed back onto the track: %s, in %.0f s', carLabel(i), now - t.since))
       elseif c and sim.isSessionStarted then
-        journal(string.format('tow gave up after 15 s: %s (%d wheels off)', carLabel(i), field(c, 'wheelsOutside') or 0))
+        journal(string.format('tow gave up after 25 s: %s (%d wheels off)', carLabel(i), field(c, 'wheelsOutside') or 0))
         local st = stuckCars[i]
         if st then st.still = 30 end -- (moved at the next tick, if hidden from the camera)
       end
     else
-      local ok, target = try(ac, 'trackProgressToWorldCoordinate', ((c.splinePosition or 0) + 20 / len) % 1)
+      local across = now - t.since > 8
+      local ok, target = try(ac, 'trackProgressToWorldCoordinate', ((c.splinePosition or 0) + (across and 2 or 20) / len) % 1)
       if ok and target and c.position then
         local dir = target:clone():sub(c.position)
         dir.y = 0
         if dir:length() > 0.5 then
           dir:normalize()
           local kmh = c.speedKmh or 0
-          if kmh < 5 then t.k = math.min(t.k * (1 + 1.5 * dt), 60) elseif kmh > 15 then t.k = t.k * (1 - 3 * dt) end
+          if kmh < 5 then t.k = math.min(t.k * (1 + 1.5 * dt), 250) elseif kmh > 15 then t.k = t.k * (1 - 3 * dt) end
           local mass = field(c, 'mass') or 700
           local force = dir:scale(mass * t.k)
-          force.y = mass * t.k * 0.3 -- (a little lift: less of it dug into the gravel)
+          force.y = mass * t.k * 0.4 -- (some lift: less of it dug into the gravel)
           try(physics, 'addForce', i, c.position, false, force, false)
         end
       end
