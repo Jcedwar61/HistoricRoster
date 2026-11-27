@@ -626,8 +626,11 @@ public static class InGameApp
     public static string InstalledFolder(string acRoot) => Path.Combine(acRoot, "apps", "lua", "HistoricRoster");
 
     /// <summary>
-    /// Copies the bundled app when it is missing or its script differs from the bundled one. Returns what was done
-    /// ("installed", "updated") or null when it was already current. Throws when there's no bundled copy.
+    /// Copies the bundled app when it is missing or its script differs from the bundled one (line endings aside: two
+    /// checkouts of the same code mustn't take turns replacing it). Never while Assetto Corsa is running: CSP restarts a
+    /// changed app at once, and a race in progress loses everything the app was doing for it. Returns what was done
+    /// ("installed", "updated", "left as it is ...") or null when it was already current. Throws when there's no
+    /// bundled copy.
     /// </summary>
     public static string? EnsureCurrent(string acRoot, string bundledFolder)
     {
@@ -636,7 +639,10 @@ public static class InGameApp
         var target = InstalledFolder(acRoot);
         var targetLua = Path.Combine(target, "HistoricRoster.lua");
         var existed = File.Exists(targetLua);
-        if (existed && File.ReadAllText(targetLua) == File.ReadAllText(bundledLua)) return null;
+        static string Code(string path) => File.ReadAllText(path).Replace("\r\n", "\n");
+        if (existed && Code(targetLua) == Code(bundledLua)) return null;
+        if (existed && GameRunning())
+            return "left as it is while Assetto Corsa is running (replacing it would restart it mid-race; it's updated next time)";
 
         // Copies the app's own files only; the RosterTool copy (tool\) and anything else in the folder is kept.
         foreach (var file in Directory.EnumerateFiles(bundledFolder, "*", SearchOption.AllDirectories))
@@ -646,6 +652,12 @@ public static class InGameApp
             File.Copy(file, dest, overwrite: true);
         }
         return existed ? "updated" : "installed";
+    }
+
+    static bool GameRunning()
+    {
+        try { return Process.GetProcessesByName("acs").Length > 0 || Process.GetProcessesByName("acs_x86").Length > 0; }
+        catch (InvalidOperationException) { return false; }
     }
 }
 
