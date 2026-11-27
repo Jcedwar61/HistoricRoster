@@ -1220,6 +1220,9 @@ local function scActive() return scm.phase ~= 'idle' end
 -- Every AI car's extra grip starts a little above AC's own 1.2: the AI spins and runs wide less, and the same for every
 -- car, so it doesn't change who's quicker.
 local GRIP_BASE = 1.25
+-- A car making up ground runs at most this much over its own AI level (and a little more grip). Pushed to the top
+-- level, AC's AI goes off again and again, and loses more than it makes up: the field waits for it instead.
+local CATCH_LEVEL = 0.03
 
 -- Laps run (completed laps + progress on the current one). Before a car first crosses the start line its
 -- track progress is ~0.99, so that part only counts once it has crossed.
@@ -1552,7 +1555,15 @@ local function steerToRealResult(step)
       local mine = lapsRun(r.c, r.e)
       for _, b in ipairs(running) do
         local d = (lapsRun(b.c, b.e) - mine) * len
-        if b.i ~= r.i and d > 0 and d < 120 and wantRank[b.i] > wantRank[r.i] then letBy[b.i] = true end
+        if b.i ~= r.i and d > 0 and d < 120 and wantRank[b.i] > wantRank[r.i] and not letBy[b.i] then
+          letBy[b.i] = r.i
+          local key = b.i .. '>' .. r.i
+          if not real.letByNoted then real.letByNoted = {} end
+          if not real.letByNoted[key] then
+            real.letByNoted[key] = true
+            journal(string.format('letting by: %s moves aside for %s', carLabel(b.i), carLabel(r.i)))
+          end
+        end
       end
     end
   end
@@ -1571,13 +1582,15 @@ local function steerToRealResult(step)
     -- runs into it, so a capped car in a pack is a moving chicane. Less AI level slows a car everywhere, smoothly.
     local slower = 0
     if hold > 0.02 then slower = math.max(slower, 0.15 * (hold - 0.02)) end
-    if wait > 0 then slower = math.max(slower, 0.04 + 0.08 * wait) end
     if final and err < 0 then slower = math.max(slower, 0.02 * -err) end
-    p.level = math.clamp(base + 0.01 * strength * err + 0.6 * catch - math.min(slower, 0.12), 0.75, 1.0)
+    slower = math.min(slower, 0.12)
+    if wait > 0 then slower = math.max(slower, math.min(0.04 + 0.1 * wait, 0.2)) end
+    p.level = math.clamp(base + 0.01 * strength * err + math.min(0.6 * catch, CATCH_LEVEL) - slower, 0.75, 1.0)
     if letBy[r.i] then p.level = 0.75 end
+    p.yieldTo = letBy[r.i]
     -- Grip only ever goes up (for cars too far back): with less grip than it expects, AC's AI brakes too late and goes
     -- off. Cars too far forward are held back by AI level and the throttle.
-    p.grip = math.clamp(GRIP_BASE + 0.015 * strength * math.max(err, 0) + 1.0 * catch, GRIP_BASE, GRIP_BASE + 0.12)
+    p.grip = math.clamp(GRIP_BASE + 0.015 * strength * math.max(err, 0) + 1.0 * catch, GRIP_BASE, GRIP_BASE + 0.08)
     p.throttle = 1
     -- From half distance, cars out of place may pass through each other, but only where nobody sees it: never the car
     -- being filmed or its rival, and only more than 250 m from the camera. (No car is moved to restore the order: AC
@@ -1587,7 +1600,7 @@ local function steerToRealResult(step)
       local okCam, cam = try(ac, 'getCameraPosition')
       hidden = okCam and cam ~= nil and r.c.position ~= nil and r.c.position:distance(cam) > 250
     end
-    pcall(physics.disableCarCollisions, r.i, (progress > 0.5 and err ~= 0 or letBy[r.i] == true) and hidden)
+    pcall(physics.disableCarCollisions, r.i, (progress > 0.5 and err ~= 0 or letBy[r.i] ~= nil) and hidden)
   end
 
   -- The running order, every 30 s.
@@ -1732,7 +1745,7 @@ local function hraiUnstick(i, c, now, since, where)
       field(c, 'isRetired') and ', RETIRED' or '')
       .. (field(c, 'isInPitlane') and ', in the pit lane' or '') .. (field(c, 'isInPit') and ', in its pit box' or '')
       .. (field(c, 'isAIGoingToPits') and ', going to pit' or '') .. (field(c, 'isRequestingPitStop') and ', asking to pit' or '')
-      .. tyreNote(c))
+      .. tyreNote(c) .. string.format(', AI level %.2f, grip %.2f', field(c, 'aiLevel') or -1, pace[i] and pace[i].grip or GRIP_BASE))
   end
 end
 
@@ -1825,6 +1838,17 @@ local function hraiTick(now)
           offset = offset + (lateral > 0 and -0.15 or 0.15) -- (side by side: apart)
         end
       end
+    end
+    local y = settled and not underSc and p.yieldTo and ac.getCar(p.yieldTo)
+    if y and side and y.position and c.position then
+      local behind = progressDelta(c.splinePosition or 0, y.splinePosition or 0) * len -- metres it is behind
+      if behind > -5 and behind < 150 then
+        local lateral = y.position:clone():sub(c.position):dot(side)
+        if math.abs(lateral) > 0.8 or not p.yieldSide then p.yieldSide = lateral > 0 and -1 or 1 end
+        offset = 0.45 * p.yieldSide
+      end
+    else
+      p.yieldSide = nil
     end
     if p.level then pcall(physics.setAILevel, i, p.level) end
     pcall(physics.setExtraAIGrip, i, grip)
