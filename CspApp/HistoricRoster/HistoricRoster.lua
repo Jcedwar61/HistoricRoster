@@ -1212,6 +1212,7 @@ end
 -- still waits for the lights), and never across the finish line (the lap it was on wouldn't count).
 local stuckCars = {}
 local movedAt = {} -- car index -> when Historic Roster last moved it (its sudden change of speed isn't an incident)
+local moveCheck = {} -- car index -> { lap, s }: a moved car, until it next crosses the line
 local function hiddenFromCamera(i, pos)
   if i == watch.target or i == watch.partner or pos == nil then return false end
   local ok, cam = try(ac, 'getCameraPosition')
@@ -1250,8 +1251,10 @@ local function rescueStuck(i, c, step)
   local nowhere = clock() - s.markAt > 45 and clock() - s.startAt > 60
   if (c.speedKmh or 0) >= 5 and not nowhere then s.still = 0 return false end
   s.still = s.still + step
-  if (s.still < 30 and not nowhere) or not hiddenFromCamera(i, c.position) then return false end
-  local why = s.still >= 30 and 'standing still 30 s' or 'getting nowhere for 45 s'
+  local beached = s.still >= 10 and (field(c, 'wheelsOutside') or 0) >= 4
+  if (s.still < 30 and not nowhere and not beached) or not hiddenFromCamera(i, c.position) then return false end
+  local why = s.still >= 30 and 'standing still 30 s' or beached and 'standing still off the track 10 s'
+    or 'getting nowhere for 45 s'
   s.still, s.mark = 0, nil
   local here = c.splinePosition or 0
   for _, k in ipairs({ 1, 2, 3, 4, 6, 8, 10, 12, -2, -4, -6, -8 }) do
@@ -1270,6 +1273,7 @@ local function rescueStuck(i, c, step)
           repairCar(i, c)
         end
         movedAt[i] = clock()
+        moveCheck[i] = { lap = c.lapCount or 0, s = c.splinePosition or 0 }
         return true
       end
     end
@@ -1636,6 +1640,17 @@ local function hraiTick(now)
   end
   for _, a in ipairs(cars) do
     local i, c = a.i, a.c
+    local m = moveCheck[i]
+    if m then
+      local sp = c.splinePosition or 0
+      if m.s > 0.9 and sp < 0.1 then
+        journal(string.format('a moved car crossing the line: %s, laps %d before, %d now (%s)', carLabel(i), m.lap,
+          c.lapCount or 0, (c.lapCount or 0) > m.lap and 'counted' or 'NOT counted'))
+        moveCheck[i] = nil
+      else
+        m.s = sp
+      end
+    end
     if settled then hraiIncident(i, c, now) end
     hrai.still[i] = (c.speedKmh or 0) < 5 and (hrai.still[i] or now) or nil
     if not hrai.still[i] then hrai.noted[i] = nil elseif settled then hraiUnstick(i, c, now, hrai.still[i]) end
@@ -1645,18 +1660,14 @@ local function hraiTick(now)
     if underSc then caution, throttle = 2, 1 end
     if settled and not underSc and dangerAhead(c) then caution, throttle, grip = 1.5, math.min(throttle, 0.85), grip + 0.04 end
     local side = field(c, 'side')
-    local around = false
     for _, b in ipairs(cars) do
       if settled and not underSc and b.i ~= i and side and b.c.position and c.position then
         local ahead = progressDelta(b.c.splinePosition or 0, c.splinePosition or 0) * len -- metres b is ahead of a
         local lateral = b.c.position:clone():sub(c.position):dot(side)                   -- metres b is to a's side
-        if ahead > 0 and ahead < 60 and hrai.still[b.i] and now - hrai.still[b.i] > 4 and (c.speedKmh or 0) < 40 then
-          -- Queued behind a stopped car (AC's AI waits behind it, like behind any car it follows): around it.
-          caution, offset, around = 0.3, lateral > 0 and -0.75 or 0.75, true
-        elseif ahead > 0 and ahead < 250 and hrai.still[b.i] and now - hrai.still[b.i] > 4 then
-          -- Local yellow (a car standing still 4 s or more): slow, careful, away from it.
-          caution, throttle = math.max(caution, 1.8), math.min(throttle, 0.85)
-          if ahead < 80 then offset = lateral > 0 and -0.5 or 0.5 end
+        if ahead > 0 and ahead < 250 and hrai.still[b.i] and now - hrai.still[b.i] > 4 then
+          -- Local yellow (a car standing still 4 s or more): careful. Not pushed sideways, and no throttle cap: a car
+          -- moved off the racing line next to a stopped car ends up in the same gravel trap, then the next one does.
+          caution = math.max(caution, 1.5)
         elseif ahead < 0 and ahead > -60 and b.run - a.run > 0.5 then
           offset = lateral > 0 and -0.35 or 0.35 -- (blue flag: a little away from the car lapping it)
         elseif math.abs(ahead) < 6 and math.abs(lateral) < 2.4 then
@@ -1668,7 +1679,7 @@ local function hraiTick(now)
     pcall(physics.setExtraAIGrip, i, grip)
     pcall(physics.setAIThrottleLimit, i, throttle)
     try(physics, 'setAICaution', i, caution)
-    try(physics, 'setAISplineOffset', i, math.clamp(offset, -0.8, 0.8), around)
+    try(physics, 'setAISplineOffset', i, math.clamp(offset, -0.8, 0.8), false)
   end
 end
 
@@ -2641,7 +2652,21 @@ local function runSafetyCar(dt)
   end
   if sc and not scm.virtual and scm.phase ~= 'green' then try(physics, 'preventAIFromRetiring', scIndex) end
   if scm.phase == 'lead' and not scm.virtual and sc then
-    if (sc.speedKmh or 0) > 30 then scm.going = true end
+    if (sc.speedKmh or 0) > 30 then scm.going, scm.stillSince = true, nil end
+    if scm.going and (sc.speedKmh or 0) < 5 then
+      scm.stillSince = scm.stillSince or now
+      if now - scm.stillSince > 4 then
+        journal(string.format('the Safety Car stopped at %.3f: gear %s, %d rpm, gas %.2f, brake %.2f, steer %.0f, %d wheels off, %s, %d AI laps left%s',
+          sc.splinePosition or 0, tostring(field(sc, 'gear')), field(sc, 'rpm') or 0, field(sc, 'gas') or 0,
+          field(sc, 'brake') or 0, field(sc, 'steer') or 0, field(sc, 'wheelsOutside') or 0,
+          (field(sc, 'collidedWith') or -1) > 0 and ('touching car ' .. (field(sc, 'collidedWith') - 1)) or 'touching nothing',
+          field(sc, 'aiLapsLeft') or -1, field(sc, 'isInPitlane') and ', in the pit lane' or ''))
+        scm.going, scm.noted = false, true
+        scm.placedAt = now - 11 -- (handed over to the "didn't get going" fallback below)
+      end
+    else
+      scm.stillSince = nil
+    end
     if not scm.going then
       try(physics, 'setAINoInput', scIndex, false)
       try(physics, 'setAIStopCounter', scIndex, 0)
