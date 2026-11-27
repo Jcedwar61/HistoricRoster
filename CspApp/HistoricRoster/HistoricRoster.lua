@@ -1663,7 +1663,9 @@ local function hraiUnstick(i, c, now, since, where)
       field(c, 'brake') or 0, field(c, 'steer') or 0, field(c, 'wheelsOutside') or 0,
       (field(c, 'collidedWith') or -1) > 0 and ('touching car ' .. (field(c, 'collidedWith') - 1))
         or field(c, 'collidedWith') == 0 and 'touching the track' or 'touching nothing',
-      field(c, 'isRetired') and ', RETIRED' or ''))
+      field(c, 'isRetired') and ', RETIRED' or '')
+      .. (field(c, 'isInPitlane') and ', in the pit lane' or '') .. (field(c, 'isInPit') and ', in its pit box' or '')
+      .. (field(c, 'isAIGoingToPits') and ', going to pit' or '') .. (field(c, 'isRequestingPitStop') and ', asking to pit' or ''))
   end
 end
 
