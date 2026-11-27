@@ -1237,7 +1237,7 @@ local function rescueStuck(i, c, step)
   if not s then s = { raced = false, still = 0 } stuckCars[i] = s end
   if not sim.isSessionStarted then s.raced, s.still, s.startAt = false, 0, nil return false end -- (on the grid, or a restart)
   s.startAt = s.startAt or clock()
-  if (c.speedKmh or 0) > 40 then s.raced, s.towTried = true, false end
+  if (c.speedKmh or 0) > 40 then s.raced, s.tows = true, 0 end
   if tows[i] then s.still, s.mark = 0, nil return false end -- (being towed: see towTick)
   -- (A car still standing 20 s after the start never got going: it's rescued too.)
   local going = s.raced or clock() - s.startAt > 20
@@ -1259,16 +1259,17 @@ local function rescueStuck(i, c, step)
   s.still, s.mark = 0, nil
   -- AC doesn't count the lap of a car that jumps from one place to another after the first part of the lap (seen in
   -- the journal: moved at 0.2, counted; at 0.39 or 0.8, not, with setCarPosition or setAICarPosition alike). Pulled
-  -- back onto the track it never jumps: so it's towed first, and moved only if the tow doesn't work.
-  if not s.towTried and has(physics, 'addForce') then
-    s.towTried = true
+  -- back onto the track it never jumps: so it's towed first, up to three times (a car towed back onto the edge of the
+  -- track can slide straight back off it), and moved only if that doesn't work.
+  if (s.tows or 0) < 3 and has(physics, 'addForce') then
+    s.tows = (s.tows or 0) + 1
     -- (Off the track: towed until it's back on. Stopped on it, spun round or tangled with another car: pulled along the
     -- racing line until it has gone 25 m.)
     tows[i] = { since = clock(), k = 4, why = why, onTrack = (field(c, 'wheelsOutside') or 0) == 0, s0 = c.splinePosition or 0 }
     journal(string.format('towing back onto the track after %s: %s', why, carLabel(i)))
     return false
   end
-  s.towTried = false
+  s.tows = 0
   local here = c.splinePosition or 0
   for _, k in ipairs({ 1, 2, 3, 4, 6, 8, 10, 12, -2, -4, -6, -8 }) do
     local at = here + k * 10 / len
@@ -1324,7 +1325,7 @@ local function towTick(dt)
       elseif c and sim.isSessionStarted then
         journal(string.format('tow gave up after 25 s: %s (%d wheels off, %.0f m on)', carLabel(i), field(c, 'wheelsOutside') or 0, gone))
         local st = stuckCars[i]
-        if st then st.still = 30 end -- (moved at the next tick, if hidden from the camera)
+        if st then st.still, st.tows = 30, 3 end -- (moved at the next tick, if hidden from the camera)
       end
     else
       local across = not t.onTrack and now - t.since > 8
