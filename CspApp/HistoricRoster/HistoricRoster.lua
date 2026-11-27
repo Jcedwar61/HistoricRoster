@@ -1124,6 +1124,7 @@ local real = {
   cars = {},          -- car index -> { pos, laps, retireAt, crossed, baseLevel, pitting, pitSince, retired }
   realLaps = 0, raceLaps = 0,
   outOfPlace = 0, status = nil,
+  lost = {},          -- car index -> true while it's laps behind where it should be (journalled once)
 }
 
 local function loadRealResult()
@@ -1195,7 +1196,8 @@ local function lapsRun(c, e)
 end
 
 -- A car stuck on track after a spin or a tangle loses laps that no steering gives back (AC ranks by completed laps,
--- and nothing can set them). So after 8 s standing still on track it's put back on the racing line where it was, at
+-- and nothing can set them). So after 8 s standing still on track, or 12 s getting nowhere (beached in the gravel,
+-- going round in circles, reversing: less than 40 m along the track), it's put back on the racing line where it was, at
 -- a spot with no car within 25 m. Only where nobody sees it: never the car being filmed or its rival, and more than
 -- 250 m from the camera at both ends. Only once it has been racing (a race session counts as started while the grid
 -- still waits for the lights), and never across the finish line (the lap it was on wouldn't count).
@@ -1215,11 +1217,16 @@ local function rescueStuck(i, c, step)
   if (c.speedKmh or 0) > 40 then s.raced = true end
   -- (A car still standing 20 s after the start never got going: it's rescued too.)
   local going = s.raced or clock() - s.startAt > 20
-  if not going or field(c, 'isInPitlane') or (c.speedKmh or 0) >= 5 then s.still = 0 return false end
-  s.still = s.still + step
-  if s.still < 8 or not hiddenFromCamera(i, c.position) then return false end
-  s.still = 0
+  if not going or field(c, 'isInPitlane') then s.still, s.mark = 0, nil return false end
   local len = math.max(field(sim, 'trackLengthM') or 5000, 500)
+  local run = (c.lapCount or 0) + (c.splinePosition or 0)
+  if not s.mark or run - s.mark > 40 / len then s.mark, s.markAt = run, clock() end
+  local nowhere = clock() - s.markAt > 12
+  if (c.speedKmh or 0) >= 5 and not nowhere then s.still = 0 return false end
+  s.still = s.still + step
+  if (s.still < 8 and not nowhere) or not hiddenFromCamera(i, c.position) then return false end
+  local why = s.still >= 8 and 'standing still 8 s' or 'getting nowhere for 12 s'
+  s.still, s.mark = 0, nil
   local here = c.splinePosition or 0
   for _, k in ipairs({ 1, 2, 3, 4, 6, 8, 10, 12, -2, -4, -6, -8 }) do
     local at = here + k * 10 / len
@@ -1231,7 +1238,7 @@ local function rescueStuck(i, c, step)
         if other and other.position and other.position:distance(pos) < 25 then clear = false end
       end
       if clear then
-        journal(string.format('put back on track after standing still 8 s: %s, %d m on', carLabel(i), k * 10))
+        journal(string.format('put back on track after %s: %s, %d m on', why, carLabel(i), k * 10))
         if try(physics, 'setCarPosition', i, pos, nil) then try(physics, 'setCarVelocity', i, vec3(0, 0, 0)) end
         return true
       end
@@ -1389,17 +1396,35 @@ local function steerToRealResult(step)
   -- real one didn't. A car falling too far behind the car it should follow gets more AI level and grip; the car ahead
   -- of it, unless it's itself too far behind its own, is held back on the throttle. (Laps lost can't be won back:
   -- AC ranks by completed laps. So the field is kept together from the start, not sorted at the end.)
+  -- A car more than half a lap behind (a long stop after a spin, say) can't be brought back by pace, and holding the
+  -- car ahead would only drop that one down the order too. Instead, the cars that should finish behind it but run
+  -- ahead of it wait for it.
   local scale = real.realLaps > 0 and real.raceLaps > 0 and real.raceLaps / real.realLaps or 1
-  local catchUp, holdBack = {}, {}
+  local catchUp, holdBack, waitFor = {}, {}, {}
   local prev = nil
-  for _, r in ipairs(want) do
+  for k, r in ipairs(want) do
     if r.e.pos > 0 then
       if prev then
         local wantGap = math.max(0, (prev.e.laps or 0) - (r.e.laps or 0)) * scale + 0.006
         local excess = lapsRun(prev.c, prev.e) - lapsRun(r.c, r.e) - wantGap -- > 0: r is too far behind prev
         if excess > 0.02 then
           catchUp[r.i] = excess
-          holdBack[prev.i] = math.max(holdBack[prev.i] or 0, excess)
+          if excess < 0.5 then
+            holdBack[prev.i] = math.max(holdBack[prev.i] or 0, excess)
+          else
+            local mine = lapsRun(r.c, r.e)
+            for m = k + 1, #want do
+              local x = want[m]
+              local over = x.e.pos > 0 and lapsRun(x.c, x.e) - mine + 0.006 or 0
+              if over > 0 then waitFor[x.i] = math.max(waitFor[x.i] or 0, over) end
+            end
+            if not real.lost[r.i] then
+              real.lost[r.i] = true
+              journal(string.format('laps lost: %s is %.1f laps behind; the cars due to finish behind wait for it', carLabel(r.i), excess))
+            end
+          end
+        elseif real.lost[r.i] and excess < 0.1 then
+          real.lost[r.i] = nil
         end
       end
       prev = r
@@ -1411,8 +1436,9 @@ local function steerToRealResult(step)
     if err ~= 0 then real.outOfPlace = real.outOfPlace + 1 end
     local strength = final and 2 or 1
     local base = r.e.baseLevel or 0.95
-    local catch = catchUp[r.i] or 0
-    local hold = (catchUp[r.i] or 0) > 0.02 and 0 or (holdBack[r.i] or 0) -- (never hold a car that is itself behind)
+    local wait = waitFor[r.i] or 0
+    local catch = wait > 0 and 0 or (catchUp[r.i] or 0)
+    local hold = catch > 0.02 and 0 or (holdBack[r.i] or 0) -- (never hold a car that is itself behind)
     local p = pace[r.i] or {}
     pace[r.i] = p
     p.level = math.clamp(base + 0.01 * strength * err + 0.6 * catch, 0.6, 1.0)
@@ -1421,6 +1447,8 @@ local function steerToRealResult(step)
     p.grip = math.clamp(GRIP_BASE + 0.015 * strength * math.max(err, 0) + 1.0 * catch, GRIP_BASE, GRIP_BASE + 0.12)
     p.throttle = 1
     if hold > 0.02 then p.throttle = math.clamp(1 - 1.5 * (hold - 0.02), 0.7, 1) end
+    -- (A light hold for a car just ahead of the one it waits for, 70 % throttle once it's a lap or more ahead.)
+    if wait > 0 then p.throttle = math.min(p.throttle, math.clamp(0.95 - 0.25 * wait, 0.7, 0.95)) end
     if final and err < 0 then p.throttle = math.min(p.throttle, math.clamp(0.9 + 0.06 * err, 0.55, 0.9)) end
     -- Cars out of place may pass through each other late in the race, but only where nobody sees it: never the car
     -- being filmed or its rival, and only more than 250 m from the camera.
