@@ -1701,8 +1701,21 @@ local function hraiTick(now)
     if stuck and now - hrai.pitStill[i] > 45 then
       try(physics, 'setAIPitStopRequest', i, false)
       try(physics, 'setAITimeToStart', i, 0)
-      try(physics, 'setAINoInput', i, false)
       hraiUnstick(i, c, now, hrai.pitStill[i] - 35, ' in the pit lane')
+    end
+    -- Still parked in its pit box after a minute (seen: in neutral there for the rest of the race): onto the racing line
+    -- beside it, which is the start of the lap, where a move doesn't cost the lap. (The camera car: see guardPitMenus.)
+    if stuck and i ~= 0 and now - hrai.pitStill[i] > 60 and field(c, 'isInPit') then
+      local ok, pos = try(ac, 'trackProgressToWorldCoordinate', c.splinePosition or 0)
+      if ok and pos and hiddenFromCamera(i, pos) then
+        if not try(physics, 'setAICarPosition', i, pos, nil) then try(physics, 'setCarPosition', i, pos, nil) end
+        try(physics, 'setSuspensionDamage', i, nil, 0)
+        movedAt[i] = now
+        moveCheck[i] = { lap = c.lapCount or 0, s = c.splinePosition or 0, how = 'setAICarPosition',
+          sector = field(c, 'currentSector') or -1, at = c.splinePosition or 0, gearAt = now }
+        hrai.pitStill[i] = nil
+        journal(string.format('parked in its pit box a minute: %s put on the track beside it', carLabel(i)))
+      end
     end
   end
   for _, a in ipairs(cars) do
