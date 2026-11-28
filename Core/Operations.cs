@@ -350,7 +350,8 @@ public static class LibraryScanner
     public const string CatalogFile = "content_catalog.installed.json";
 
     /// <summary>Bumped when the matching logic changes, so the next start re-scans even if no folder changed.</summary>
-    private const int ScanVersion = 5; // 3: Ram trucks matched as "RAM"; 4: trucks and Cup cars kept apart; 5: IMSA, IndyCar, DTM, GT4, TCR, Group C
+    private const int ScanVersion = 6; // 3: Ram trucks matched as "RAM"; 4: trucks and Cup cars kept apart; 5: IMSA, IndyCar, DTM, GT4, TCR, Group C;
+                                       // 6: more F1 teams, F1 chassis codes over seasons, folder words, a season earlier, GT1/GT2 kept apart
     private const string StampFile = "_library_scan.json";
 
     private record ScanStamp(string ContentFolder, DateTime CarsUtc, DateTime TracksUtc, int Cars, int Tracks, int Version);
@@ -389,8 +390,9 @@ public static class LibraryScanner
         // F1 = same team + same season (team from its name or chassis code);
         // NASCAR = same make + same car generation, the nearest model year, and the track-type version
         //          (road course / superspeedway / short track) where the mod has them;
-        // GT, prototypes, Supercars = the distinctive words of the model name (e.g. "499p", "m4 gt3", "ford ba")
-        //          from its first season for 5 seasons.
+        //      and the same chassis code (e.g. "p25") within 3 seasons;
+        // GT, prototypes, Supercars = the distinctive words of the model name or folder (e.g. "499p", "m4 gt3", "ford ba")
+        //          from the season before the car's year to 5 after.
         // Cars without a year or a recognisable model name get no rule (never a look-alike).
         var rules = new List<CarRule>();
         var stock = new List<(CarInfo Car, string Make, string Variant)>();
@@ -406,6 +408,15 @@ public static class LibraryScanner
                 if (teams.Count == 0) { skipped++; continue; }
                 rules.AddRange(teams.Select(team => new CarRule
                     { Category = "F1", YearFrom = car.Year, YearTo = car.Year, Team = team, Model = car.Folder, Kunos = car.Kunos, Note = note }));
+                // The same chassis in the seasons around it: mods are often dated a season off, and many chassis
+                // raced for several seasons (BRM P25, Vanwall VW5, Ferrari 375). Only where the real entry names
+                // that chassis code, so a team's other cars aren't matched to it.
+                if (CarNames.ChassisCodes(car) is { Count: > 0 } chassis)
+                    rules.AddRange(teams.Select(team => new CarRule
+                    {
+                        Category = "F1", YearFrom = car.Year - 3, YearTo = car.Year + 3, Team = team, CarWords = chassis,
+                        Model = car.Folder, Kunos = car.Kunos, Note = note,
+                    }));
                 continue;
             }
             if (car.Category == "NASCAR")
@@ -414,18 +425,24 @@ public static class LibraryScanner
                 stock.Add((car, make, StockCars.Variant(car)));
                 continue;
             }
-            var words = CarNames.ModelWords(car);
-            if (words.Count == 0) { skipped++; continue; }
-            rules.Add(new CarRule
-            {
-                // Classes differ between series (GT3 = GTD = SP9 ...), so the model words do the matching, not the category.
-                Category = car.Category == "Supercars" ? "Supercars" : null,
-                YearFrom = car.Year, YearTo = car.Year + 5,
-                CarWords = words,
-                // A car without "Evo" in its name isn't the later Evo version.
-                Exclude = car.Name.Contains("evo", StringComparison.OrdinalIgnoreCase) ? null : new List<string> { "Evo" },
-                Model = car.Folder, Kunos = car.Kunos, Note = note,
-            });
+            // The name's model words, and the folder's when they differ ("Aston Martin V12 LMDh 2025" in
+            // fsr_aston_martin_valkyrie is the Valkyrie).
+            var wordSets = new[] { CarNames.ModelWords(car), CarNames.FolderWords(car) }
+                .Where(w => w.Count > 0).DistinctBy(w => string.Join(' ', w.Order())).ToList();
+            if (wordSets.Count == 0) { skipped++; continue; }
+            foreach (var words in wordSets)
+                rules.Add(new CarRule
+                {
+                    // Classes differ between series (GT3 = GTD = SP9 ...), so the model words do the matching, not the category.
+                    Category = car.Category == "Supercars" ? "Supercars" : null,
+                    // Mods are often named after the season after the car's first ("BMW M Hybrid V8 LMDh 2024"
+                    // raced from 2023), so from the season before.
+                    YearFrom = car.Year - 1, YearTo = car.Year + 5,
+                    CarWords = words,
+                    // A car without "Evo" in its name isn't the later Evo version.
+                    Exclude = car.Name.Contains("evo", StringComparison.OrdinalIgnoreCase) ? null : new List<string> { "Evo" },
+                    Model = car.Folder, Kunos = car.Kunos, Note = note,
+                });
         }
         rules.AddRange(StockCars.Rules(stock));
         // Exact-season rules first, and track-type versions before the general version of a car.
