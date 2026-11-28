@@ -8,7 +8,7 @@
         <RootNamespace>HistoricRosterPlugin</RootNamespace>
         <AssemblyName>RosterTool</AssemblyName>
         <!-- Keep in step with App/HistoricRosterApp.csproj: written to SimCast's race_context.json as app_version. -->
-        <Version>1.11.3</Version>
+        <Version>1.11.4</Version>
     </PropertyGroup>
 
     <ItemGroup>
