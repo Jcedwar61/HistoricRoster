@@ -3396,7 +3396,9 @@ end
 -- race the program wrote), pole on its own slot, then every car 8 m behind the one ahead (the F1 rule: rows of two,
 -- 16 m apart, staggered on the two sides pole and second took), along the racing line. Many tracks' own start slots
 -- are packed much tighter, which piles cars into each other at the first corner. A track whose slots are already that
--- far apart is left as it is. Driven and watched races alike, offline; done again after a restart.
+-- far apart is left as it is. Watched races only, offline; done again after a restart. A race you drive starts from
+-- the track's own grid, with no AI car moved: AI cars moved on the grid before the start can sit there and never
+-- drive off.
 local grid = { session = -1, done = false, settle = 0, startedSeen = false }
 local GRID_SLOT = 8 -- metres from one grid slot to the next
 
@@ -3408,7 +3410,7 @@ local function placeGrid(dt)
   end
   if sim.isSessionStarted then grid.startedSeen = true return end
   if grid.startedSeen then grid.done, grid.settle, grid.startedSeen = false, 0, false end -- (back on the grid: a restart)
-  if grid.done or sessionKind() ~= 'race' or not ourRaceConfig() then return end
+  if grid.done or sessionKind() ~= 'race' or not ourRaceConfig() or not readWatchFlag() then return end
   grid.settle = grid.settle + dt
   if grid.settle < 1 then return end -- (let AC finish putting the cars on their slots)
   grid.done = true
