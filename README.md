@@ -231,10 +231,11 @@ Historic Roster needs no other CSP apps for a race. The in-game app (installed b
 before every race when Custom Shaders Patch is there) does it all, offline, in the races the
 program writes; other races are left alone.
 
-- **The starting grid.** Each car starts from its real grid slot. Where a track's grid boxes are
-  too tight for the field, the in-game app lays the grid out itself before the start: every car
-  8 m behind the one ahead, in the two lanes of the first two grid boxes. A grid that is already
-  spaced well is left as it is, and a restart lays it out again. Your driver's real slot is also
+- **The starting grid.** Each car starts from its real grid slot. In a watched race, where a
+  track's grid boxes are too tight for the field, the in-game app lays the grid out itself before
+  the start: every car 8 m behind the one ahead, in the two lanes of the first two grid boxes. A
+  grid that is already spaced well is left as it is, and a restart lays it out again. A race you
+  drive starts from the track's own grid boxes, and no AI car is moved. Your driver's real slot is also
   written to `race.ini` (`STARTING_POSITION`); with qualifying first, it comes from qualifying.
 - **The Safety Car.** **Add a Safety Car** (off by default) puts one (`ferrari_458_s3`, using a
   livery with "safety" in its name when the car has one) at the back of the grid. It never races:
