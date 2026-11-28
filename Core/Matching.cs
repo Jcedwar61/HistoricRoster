@@ -11,6 +11,7 @@ public static class CarNames
         "acf", "hy", "gt", "gt1", "gt2", "gt3", "gt4", "gte", "gtd", "lmp", "lmp1", "lmp2", "lmp3", "lmh", "lmdh", "hypercar",
         "supercars", "supercar", "v8", "atcc", "vasc", "imsa", "wec", "elms", "race", "racing", "version", "spec", "edition",
         "mod", "by", "the", "team", "series", "car", "cars", "pack", "and", "de", "of", "championship", "season",
+        "lmgt3", "realspec", "bop", "tcr",
     };
 
     /// <summary>
@@ -20,23 +21,80 @@ public static class CarNames
     public static List<string> ModelWords(CarInfo car)
     {
         var name = car.Name;
-        // Packs put their own name first: "ACF HY - Ferrari 499P 2023".
+        // Packs put their own name first: "ACF HY - Ferrari 499P 2023"; a few put the class last instead:
+        // "Aston Martin Valkyrie '25 - LMDh".
         var dash = name.LastIndexOf(" - ", StringComparison.Ordinal);
-        if (dash > 0 && dash < name.Length - 3) name = name[(dash + 3)..];
-        name = Regex.Replace(name, @"\([^)]*\)|\[[^\]]*\]", " ");   // "(AJ4 White Cement Spec)"
-        name = Regex.Replace(name, @"'\d{2}\b", " ");               // "'26"
+        if (dash > 0 && dash < name.Length - 3)
+        {
+            var after = Distinctive(name[(dash + 3)..], car);
+            return after.Count > 0 ? after : Distinctive(name[..dash], car);
+        }
+        return Distinctive(name, car);
+    }
+
+    /// <summary>
+    /// The model words of the car's folder, without a pack prefix: fsr_aston_martin_valkyrie -> [valkyrie]
+    /// (its name, "Aston Martin V12 LMDh 2025", doesn't say Valkyrie).
+    /// </summary>
+    public static List<string> FolderWords(CarInfo car)
+    {
+        var parts = car.Folder.Split(new[] { '_', ' ', '-', '.' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+        var brand = CarRule.Words(car.Brand);
+        // "fsr_", "iht_", "jw_", "lmh_": a short all-letter first part that isn't the make is the mod maker's tag.
+        if (parts.Count >= 3 && parts[0].Length <= 4 && parts[0].All(char.IsLetter) && !brand.Contains(parts[0].ToLowerInvariant()))
+            parts.RemoveAt(0);
+        var words = Distinctive(string.Join(' ', parts), car);
+        // Only with a word the name doesn't have ("valkyrie", "rcf"): fewer words than the name's would only match
+        // more loosely (ts_audi_r18_2011 -> [r18] for "Audi R18 TDI Ultra").
+        var name = ModelWords(car);
+        return words.Any(w => !name.Contains(w) && w.Length >= 2 && !Makes.Contains(w) && !(w.Length == 2 && w.All(char.IsLetter)))
+            ? words : new List<string>();
+    }
+
+    /// <summary>
+    /// The F1 chassis code in the name, every numbered word of it: "BRM P25" -> [p25], "Ferrari 375" -> [375],
+    /// "McLaren MP4-22" -> [mp4, 22]. Empty when the name has none.
+    /// </summary>
+    public static List<string> ChassisCodes(CarInfo car)
+    {
+        var codes = ModelWords(car).Where(w => w.Any(char.IsDigit) && w != "f1").ToList();
+        return codes.Any(w => w.Length >= 2) ? codes : new List<string>();
+    }
+
+    private static List<string> Distinctive(string text, CarInfo car)
+    {
+        text = Regex.Replace(text, @"\([^)]*\)|\[[^\]]*\]", " ");   // "(AJ4 White Cement Spec)"
+        text = Regex.Replace(text, @"'\d{2}\b", " ");               // "'26"
 
         var brand = CarRule.Words(car.Brand);
         static bool IsYear(string w) => w.Length == 4 && int.TryParse(w, out var y) && y is >= 1950 and <= 2039;
-        var words = CarRule.Words(name).Where(w => !brand.Contains(w) && !Noise.Contains(w) && !IsYear(w)).ToList();
+        var own = CarRule.Words(text);
+        var words = own.Where(w => !brand.Contains(w) && !Noise.Contains(w) && !IsYear(w)).ToList();
         // Model codes (with digits) are the most telling; then the rest, in name order.
         var pick = words.Where(w => w.Any(char.IsDigit)).Concat(words.Where(w => !w.Any(char.IsDigit))).Take(3).ToList();
         if (!pick.Any(w => w.Length >= 2)) return new List<string>();
-        // GT3 and GT4 versions of the same model ("BMW M4 GT3" / "BMW M4 GT4") are different cars.
-        foreach (var cls in new[] { "gt3", "gt4" })
-            if (CarRule.Words(car.Name).Contains(cls)) pick.Add(cls);
-        return pick;
+        // A make alone ("Ford GT GTE" -> [ford]) would match every car of that make.
+        if (pick.All(Makes.Contains)) return new List<string>();
+        // GT3 and GT4 versions of the same model ("BMW M4 GT3" / "BMW M4 GT4") are different cars, and so are the
+        // GT2 ones ("BMW M3 GT2", "Ferrari 458 GT2"). GT1 only marks a different car next to a bare number
+        // ("Porsche 911 GT1"): a Corvette C5-R is GT1 without saying so.
+        var all = CarRule.Words(car.Name);
+        all.UnionWith(CarRule.Words(car.Folder));
+        if (all.Contains("gt3")) pick.Add("gt3");
+        if (all.Contains("gt4")) pick.Add("gt4");
+        if (own.Contains("gt2")) pick.Add("gt2");
+        if (own.Contains("gt1") && pick.All(w => w.All(char.IsDigit))) pick.Add("gt1");
+        return pick.Distinct().ToList();
     }
+
+    private static readonly HashSet<string> Makes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ford", "chevrolet", "chevy", "toyota", "nissan", "honda", "bmw", "audi", "porsche", "ferrari", "mercedes", "amg", "aston",
+        "martin", "lamborghini", "mclaren", "holden", "dodge", "cadillac", "lexus", "mazda", "peugeot", "renault", "alfa", "romeo",
+        "jaguar", "opel", "volkswagen", "vw", "hyundai", "kia", "lotus", "bentley", "acura", "subaru", "mitsubishi", "maserati",
+        "saleen", "panoz", "cupra", "seat", "skoda", "volvo",
+        // Not chassis makers (Lola, Reynard, Dallara, Riley ...): in CART or IndyCar a season's Lola is that car.
+    };
 }
 
 /// <summary>Stock cars: the make from the model name, the car generation, and the track-type versions some mods ship.</summary>
