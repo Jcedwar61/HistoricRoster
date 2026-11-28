@@ -499,18 +499,36 @@ when the race loads. Open the app from the apps sidebar for its **Watch** tab:
   without it. **The Safety Car is never filmed**;
 - a caption in the bottom-left corner shows who is on screen (position, number, driver, car), and
   which position a battle is for and against whom;
-- the **director camera** films whichever car you follow: trackside TV shots that zoom as the
-  car approaches and cut to the next camera as it passes, mixed with chase and helicopter shots
-  (or pick one kind). Every trackside camera is placed where it has a clear view of the track and
-  of the stretch the car comes from (on ovals: on the infield, above the walls). The camera keeps the
-  car (and in a battle, both cars) in the picture: it aims a little ahead of the car, never zooms in
-  so far that a fast car can slip out, and widens the view quickly if a car nears the edge. Every camera
+- the **director camera** films whichever car you follow, mostly on trackside TV cameras, with an
+  onboard, helicopter or chase shot now and then (at most one every half a minute, after at least
+  four trackside shots), or pick one kind. On a track that has its own TV cameras (most do: the
+  ones its maker placed for AC's replays), it uses them **one set at a time, as a relay round the
+  lap**: each camera films its own stretch of road, and when the car leaves that stretch the
+  picture cuts to the next camera down the road, never back to one the car has already passed. The
+  sets (Tv 1, Tv 2 ...) film the same corners from other places, so they are never mixed; fixed
+  cameras that don't turn (a whole "Static" set, or a few in a set) aren't used, and where a set's
+  camera can't see the car, another set takes over from there. Each camera zooms within the range its maker gave it. A
+  new car to follow elsewhere sometimes brings another set (at most every minute and a half), and
+  **Next shot** switches to the next set. A track without its own cameras gets trackside cameras
+  placed well back from the edge on long lenses, where they have a clear view of the track (on
+  ovals: on the infield, above the walls), and as few of them as cover the lap are used the same
+  way, as a relay down the road (helicopter shots fill any stretch none of them sees, and stand in
+  for the first minute while they're placed). When a car is about to pass right by a camera, the
+  next camera takes it over (no whip pan, no sudden wide zoom). The camera keeps the car in the
+  picture, zoomed to the car itself, with a little room ahead of it in the direction it's moving;
+  its rival in a battle comes into the picture only when the two are close together as the camera
+  sees them (nose to tail down a long lens), never by zooming out until both are dots. Every camera
   move and zoom starts and stops smoothly, and the camera follows the car without lagging behind it, so
-  the picture doesn't jerk. A change of car on the same trackside camera is a smooth pan; otherwise
-  it's a clean cut. Before a car passes so close that following it would need a whip pan, the director
-  cuts to the next camera. It also cuts to a new shot within a fraction of a second when something
-  hides the car or it can't be kept in frame,
-  and within a second when the car pits, retires or stops. Assetto Corsa's
+  the picture doesn't jerk; the helicopter keeps flying alongside instead of swinging round the car
+  in the corners. In a battle the rival stays the same while it's in range (in a train of cars the
+  picture doesn't swing between the car ahead and the car behind), and each car is followed for at
+  least 12 seconds. Changing to another car waits (up to 6 seconds) for the shot on screen to end by
+  itself, so the cut to the next camera and the change of car are one cut, not two. A change of car on
+  the same trackside camera is a smooth pan; otherwise it's a clean cut. It also cuts to a new shot
+  when something hides the car for more than a moment (a second and a half on the track's own
+  cameras), and within a second when the car pits, retires or stops; a camera that just lost the car
+  isn't used again for a few seconds, and one that loses it twice isn't used again that session. The journal gets a line every five minutes on how the race was
+  filmed (shots, their average length, how many were very short). Assetto Corsa's
   own TV cameras can only follow your seat's car during a
   live race, which is why the app brings its own. It only ever runs in a watch-only race;
   untick it to get AC's cameras back;
@@ -523,7 +541,7 @@ when the race loads. Open the app from the apps sidebar for its **Watch** tab:
     more onboard laps than in the race. When nobody is out on track, the camera goes to a car
     leaving the pits (pit lane cameras), else stays with a car in its pit box. **Leader** follows
     the fastest car while it is out on track; **Closest battle** works like whole grid here;
-  - **the race** starts on your seat, with wide shots of the grid and the field getting away. On
+  - **the race** starts on your seat, on the trackside cameras as the field gets away. On
     the **last lap** the camera stays with the leader and films it **crossing the line** from the
     cameras at the finish, holds on the winner, then shows the next cars taking the chequered flag,
     class winners and close finishes first. Cars on their cool-down lap are never treated as a
