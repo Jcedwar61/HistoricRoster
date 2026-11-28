@@ -1666,6 +1666,8 @@ end
 local function releaseAll()
   for i, e in pairs(real.cars) do
     if e.steered then releaseCar(i, e) e.steered = false end
+    -- On its way to retire as in real life but not parked yet: it races on instead.
+    if e.pitting and not e.retired then pcall(physics.setAIPitStopRequest, i, false) e.pitting = false end
   end
 end
 
@@ -3649,16 +3651,20 @@ function script.update(dt)
 
   chooseTarget(step)
 
-  -- Steer the race to the real result.
+  -- Steer the race to the real result. Not while you drive: then the AI just races (every car back to its own pace
+  -- and collisions, no real retirements) until you hand the car back.
   if not real.loaded then loadRealResult() end
   if real.available then
-    if real.enabled then
+    local on = real.enabled and not userDriving()
+    if on then
       local ok, err = pcall(steerToRealResult, step)
       real.status = not ok and tostring(err) or nil
     elseif real.wasEnabled then
       releaseAll()
+      real.status = nil
+      if userDriving() then journal('you are driving: the real-result steering is off until the AI drives again') end
     end
-    real.wasEnabled = real.enabled
+    real.wasEnabled = on
   end
 
   -- Race-craft for every AI car, with the steering's pace.
@@ -3763,6 +3769,8 @@ local function tabWatch()
     end
     ui.sameLine()
     if real.status then ui.textColored(real.status, colors.bad)
+    elseif real.enabled and userDriving() then
+      ui.textDisabled('off while you drive: the AI just races')
     elseif real.enabled then
       ui.textDisabled(real.outOfPlace == 0 and 'every car is in its real place' or (real.outOfPlace .. ' car(s) still out of their real place'))
     end
