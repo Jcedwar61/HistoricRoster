@@ -514,6 +514,10 @@ local director = {
   logFov = math.log(30), logFovV = 0, goalRate = 0, lastGoal = nil, -- zoom (smoothed in log scale)
   panFor = 0, panTotal = 1,    -- seconds left of a pan from one car to another (no cut), and its whole length
   lastTarget = nil,
+  stats = { since = 0, cuts = 0, total = 0, short = 0, kinds = {} }, -- shots since the last journal line about them
+  notes = false,   -- every cut in the journal, for testing (see updateDirector)
+  avoid = {},      -- camera -> clock() until which it isn't cut to (it has just lost the car)
+  placedOnly = false, -- (testing: the cameras placed by this app even on a track with its own)
 }
 
 -- Critically damped spring towards 0 (exact for any frame time, so it never overshoots or blows up): x is the offset
@@ -799,7 +803,7 @@ end
 
 local BATTLE_M = 30      -- a car this close behind another one (metres) is fighting it
 local BATTLE_END_M = 55  -- ... and the fight is over when the gap grows past this
-local MIN_HOLD = 7       -- seconds a car stays on screen at least (unless it stops racing)
+local MIN_HOLD = 12      -- seconds a car stays on screen at least (unless it stops racing)
 
 -- Gap in metres from the car ahead (a) to the car behind (b) on track, nil when it can't be told.
 local function gapMeters(a, b)
@@ -844,15 +848,22 @@ local function battles(order)
   return list
 end
 
--- The current target is still in a fight: the car ahead or behind it (in its class) is within BATTLE_END_M.
+-- The current target is still in a fight: the car ahead or behind it (in its class) is within BATTLE_END_M. Its
+-- rival is the nearer of the two; for the car on screen, the rival already in the picture while it's still in range
+-- (in a train of cars, switching between the car ahead and the car behind swings the picture back and forth).
 local function stillFighting(order, idx)
   if multiClass() then order = classOrder(order, classOf(idx)) end
   for k, c in ipairs(order) do
     if c.index == idx then
       local ahead, behind = order[k - 1], order[k + 1]
-      if ahead and racing(ahead) and (gapMeters(ahead, c) or math.huge) < BATTLE_END_M then return true, ahead.index end
-      if behind and racing(behind) and (gapMeters(c, behind) or math.huge) < BATTLE_END_M then return true, behind.index end
-      return false
+      local ga = ahead and racing(ahead) and gapMeters(ahead, c) or math.huge
+      local gb = behind and racing(behind) and gapMeters(c, behind) or math.huge
+      if idx == watch.target and watch.partner ~= nil then
+        if ahead and ahead.index == watch.partner and ga < BATTLE_END_M then return true, ahead.index end
+        if behind and behind.index == watch.partner and gb < BATTLE_END_M then return true, behind.index end
+      end
+      if math.min(ga, gb) >= BATTLE_END_M then return false end
+      return true, ga <= gb and ahead.index or behind.index
     end
   end
   return false
@@ -890,12 +901,35 @@ local function setTarget(want, partner)
   watch.partner = partner
   if want == nil then return end
   if want ~= watch.target then
+    watch.pendingWant = nil
     watch.target, watch.targetHeld, watch.offTrackFor = want, 0, 0
     local c = ac.getCar(want)
     watch.pickedLap = c and c.lapCount or 0 -- (the lap it was picked on: a qualifying lap is followed to its end)
     try(ac, 'focusCar', want) -- HUD and sounds follow the shown car where AC allows it
   end
   watch.lastShown[want] = clock() -- (while it's on screen)
+end
+
+-- Another car, when nothing forces the change: it waits for the shot on screen to end by itself (the car leaving the
+-- camera's stretch), and the picture moves on to the new car with that cut. Two cuts a moment apart (the next camera,
+-- then another car) are a flash on screen. It waits 6 seconds at most.
+local function changeTarget(want, partner, now)
+  if now or want == nil or want == watch.target or watch.target == nil or not director.shot then
+    return setTarget(want, partner)
+  end
+  -- (Asked for again every half second while it's wanted; a gap means it was dropped, and it starts afresh.)
+  if watch.pendingWant ~= want or clock() - (watch.pendingSeen or 0) > 1.5 then
+    watch.pendingWant, watch.pendingAt = want, clock()
+  end
+  watch.pendingSeen = clock()
+  watch.pending, watch.pendingPartner = want, partner
+  if clock() - watch.pendingAt > 6 then
+    watch.pending = nil
+    return setTarget(want, partner)
+  end
+  local order = runningOrder()
+  local _, current = stillFighting(order, watch.target)
+  setTarget(watch.target, current)
 end
 
 -- ---- practice and qualifying
@@ -1018,6 +1052,7 @@ end
 
 local function chooseTarget(dt)
   watch.targetHeld = watch.targetHeld + dt
+  watch.pending = nil -- (a car waiting for the next cut: asked for afresh every time, while it's still wanted)
   local order = runningOrder()
   if #order == 0 then return end
   updateLaps()
@@ -1058,7 +1093,14 @@ local function chooseTarget(dt)
   if watch.follow == 'leader' then
     local leader = leaderOnTrack(order)
     local _, partner = stillFighting(order, leader)
-    return setTarget(leader, partner)
+    return changeTarget(leader, partner, leave or skip)
+  end
+
+  -- A cut has only just happened: not another car straight after it (two cuts in a row are a flash on screen).
+  -- The change waits a moment, for the shot to settle.
+  if not leave and watch.target ~= nil and director.shot and director.shot.age < 2.5 and watch.targetHeld > 1 then
+    local _, partner = stillFighting(order, watch.target)
+    return setTarget(watch.target, partner)
   end
 
   -- 'grid' and 'battle': a battle on track always comes first.
@@ -1066,7 +1108,7 @@ local function chooseTarget(dt)
     local fighting, partner = stillFighting(order, watch.target)
     -- Stay with a fight while it lasts (up to 40 s, unless a much better one starts elsewhere).
     if fighting and (watch.targetHeld < 40 or not best) then
-      if not best or watch.targetHeld < 8 or best.score < 2.5 or best.behind == watch.target or best.ahead == watch.target then
+      if not best or watch.targetHeld < 15 or best.score < 2.5 or best.behind == watch.target or best.ahead == watch.target then
         return setTarget(watch.target, partner)
       end
     end
@@ -1074,16 +1116,16 @@ local function chooseTarget(dt)
     -- couple of seconds makes the pictures jumpy.
     if watch.targetHeld < MIN_HOLD then return setTarget(watch.target, fighting and partner or nil) end
   end
-  if best then return setTarget(best.behind, best.ahead) end
+  if best then return changeTarget(best.behind, best.ahead, leave or skip) end
 
   -- No battle anywhere.
   if watch.follow == 'battle' then
     local leader = leaderOnTrack(order)
-    if not (skip and leader == watch.target) then return setTarget(leader, nil) end
+    if not (skip and leader == watch.target) then return changeTarget(leader, nil, leave or skip) end
   end
   if watch.target ~= nil and watch.targetHeld < watch.holdFor and not leave then return setTarget(watch.target, nil) end
-  watch.holdFor = 14 + math.random() * 10
-  setTarget(gridPick(order), nil)
+  if not watch.pendingWant then watch.holdFor = 20 + math.random() * 12 end
+  changeTarget(watch.pendingWant or gridPick(order), nil, leave or skip)
 end
 
 -- Ideal line off for the watched race (AC's "Ideal Line" hotkey command toggles it).
@@ -1911,20 +1953,26 @@ local function rayTrack(from, dir, dist)
   return ok and tonumber(d) or -1
 end
 
--- Nothing solid between the camera and a point (the last 2 m before it don't count: the car itself, the kerb).
-local function clearView(from, to)
+-- Nothing solid between the camera and a point (the last 2 m before it don't count: the car itself, the kerb). With
+-- `skip`, the first metres from the camera don't count either: a track's own camera often stands inside a grandstand
+-- roof or a tower, whose walls would block every view from it.
+local function clearView(from, to, skip)
   local dir = to:clone():sub(from)
   local dist = dir:length()
-  if dist < 3 then return true end
+  skip = skip or 0
+  if dist < 3 + skip then return true end
   dir:scale(1 / dist)
-  if rayTrack(from, dir, dist - 2) >= 0 then return false end
+  local start = skip > 0 and from:clone():addScaled(dir, skip) or from
+  local span = dist - 2 - skip
+  if rayTrack(start, dir, span) >= 0 then return false end
   local scene = solidMeshes()
   if scene then
-    local ok, d = pcall(function() return scene:raycast(render.createRay(from, dir, dist - 2)) end)
-    if ok and d and d >= 0 and d < dist - 2 then return false end
+    local ok, d = pcall(function() return scene:raycast(render.createRay(start, dir, span)) end)
+    if ok and d and d >= 0 and d < span then return false end
   end
   return true
 end
+local TRACK_CAM_SKIP = 6 -- metres of a track camera's own housing not counted
 
 -- The point a camera aims at on a car (about its middle), and on the racing line.
 local function carPoint(c) return c.position:clone():addScaled(c.up, 0.7) end
@@ -1973,16 +2021,21 @@ local function coverage(pos, progress)
 end
 
 -- The track's own TV cameras (data/cameras.ini, cameras_1.ini ...: placed by the track's maker for AC's replays), when
--- it has them: far better placed than any worked out here. Each covers a stretch of the lap (IN_POINT to OUT_POINT)
--- and often stands far away on a long lens, so it films from further than MAX_RANGE.
+-- it has them: far better placed than any worked out here. Each file is a SET: a relay of cameras round the whole lap,
+-- each covering its own stretch (IN_POINT to OUT_POINT), handing the car to the next one at the end of it. The sets
+-- overlap one another (another angle on the same corner), so a picture is only ever cut within one set: mixing them
+-- cuts between cameras in front of the car and behind it, back and forth. A set of fixed cameras that don't turn
+-- ("Static") isn't used, and nor is a set that leaves big parts of the lap uncovered. The cameras often stand far
+-- away on a long lens, so they film from further than MAX_RANGE.
 local TRACK_CAM_RANGE = 900
 local function loadTrackCameras()
   local folder = ac.getFolder(ac.FolderID.CurrentTrackLayout) .. '/data/'
   local len = trackLen()
-  local list = {}
+  local sets, all = {}, {}
   for n = 0, 9 do
     local text = io.load(folder .. (n == 0 and 'cameras.ini' or ('cameras_' .. n .. '.ini')))
     if text then
+      local set = { cams = {}, name = 'cameras' .. (n == 0 and '' or ('_' .. n)), covered = 0, fixed = 0 }
       local cam
       local function finish()
         if not (cam and cam.pos and cam.inP and cam.outP) then return end
@@ -1998,42 +2051,137 @@ local function loadTrackCameras()
         tangent.y = 0
         tangent:normalize()
         local side = tangent:cross(UP, vec3()):dot(cam.pos:clone():sub(base)) > 0 and 1 or -1
-        table.insert(list, { pos = cam.pos, progress = progress, back = into * len, fwd = (span - into) * len,
-          high = cam.pos.y - base.y > 8, side = side, range = TRACK_CAM_RANGE, track = true })
+        local minFov, maxFov = tonumber(cam.minFov), tonumber(cam.maxFov)
+        if minFov and maxFov and minFov > maxFov then minFov, maxFov = maxFov, minFov end
+        local entry = { pos = cam.pos, progress = progress, back = into * len, fwd = (span - into) * len,
+          high = cam.pos.y - base.y > 8, side = side, range = TRACK_CAM_RANGE, track = true,
+          inP = cam.inP % 1, outP = cam.outP, span = span, minFov = minFov, maxFov = maxFov, fixed = cam.fixed }
+        table.insert(set.cams, entry)
+        set.covered = set.covered + span
+        if cam.fixed then set.fixed = set.fixed + 1 end
       end
       for line in text:gmatch('[^\r\n]+') do
         if line:match('^%[CAMERA_') then
           finish()
           cam = {}
+        elseif line:match('^%[') then
+          finish()
+          cam = nil
         elseif cam then
           local k, v = line:match('^%s*([%w_]+)%s*=%s*(.-)%s*$')
           if k == 'POSITION' then
             local x, y, z = v:match('([%-%d%.eE]+)%s*,%s*([%-%d%.eE]+)%s*,%s*([%-%d%.eE]+)')
             if x then cam.pos = vec3(tonumber(x), tonumber(y), tonumber(z)) end
           elseif k == 'IN_POINT' then cam.inP = tonumber(v)
-          elseif k == 'OUT_POINT' then cam.outP = tonumber(v) end
+          elseif k == 'OUT_POINT' then cam.outP = tonumber(v)
+          elseif k == 'MIN_FOV' then cam.minFov = v
+          elseif k == 'MAX_FOV' then cam.maxFov = v
+          elseif k == 'IS_FIXED' then cam.fixed = tonumber(v) == 1
+          end
+        else -- ([HEADER])
+          local name = line:match('^%s*SET_NAME%s*=%s*(.-)%s*$')
+          if name and name ~= '' then set.name = name end
         end
       end
       finish()
+      for _, e in ipairs(set.cams) do
+        if not e.fixed then table.insert(all, e) end
+      end
+      if #set.cams >= 4 and set.covered >= 0.85 and set.fixed <= #set.cams / 2 then table.insert(sets, set) end
     end
   end
-  return list
+  return sets, all
+end
+
+-- The cameras placed round the track, once they're all placed, made into a relay like a track's own set: as few of
+-- them as cover the lap, each filming the car coming towards it and on past it for as long as it can, then handing
+-- over to the next camera down the road where that one has the car in view. (Where no camera sees the road, the
+-- relay has a gap: the director finds another shot there.)
+local function placedRelay()
+  local all = {}
+  for _, sp in ipairs(spots.list) do all[#all + 1] = sp end
+  local len = trackLen()
+  if #all < 6 or len < 100 then return end
+  table.sort(all, function(a, b) return a.progress < b.progress end)
+  -- From each camera, the next is the one (of those that see the road before this one loses it) that reaches
+  -- furthest on; where none does, simply the next one round.
+  local list, k, travelled = { all[1] }, 1, 0
+  while true do
+    local a = all[k]
+    local best, bestReach, bestD = nil, -math.huge, nil
+    for step = 1, math.min(#all - 1, 12) do
+      local j = (k - 1 + step) % #all + 1
+      local b = all[j]
+      local d = ((b.progress - a.progress) % 1) * len
+      if d - b.back <= a.fwd then
+        if d + b.fwd > bestReach then best, bestReach, bestD = j, d + b.fwd, d end
+      elseif not best then
+        best, bestD = j, d
+        break
+      end
+    end
+    if not best then break end
+    travelled = travelled + bestD
+    if travelled >= len - 1 or best == 1 then break end
+    list[#list + 1] = all[best]
+    k = best
+  end
+  local n = #list
+  if n < 4 then return end
+  local outM, inM = {}, {} -- metres from each camera's own point of the track: where its stretch ends, and starts
+  for k = 1, n do
+    local a, b = list[k], list[k % n + 1]
+    local gap = ((b.progress - a.progress) % 1) * len
+    -- (Half way through the road both see, but not much after the car has gone by: going away is the weaker
+    -- picture. Where they don't overlap, at the end of this one's view.)
+    local lo, hi = math.max(gap - b.back, 15), math.min(a.fwd, gap)
+    local hand = lo > hi and hi or math.min((lo + hi) / 2, math.max(lo, 60))
+    outM[k] = hand
+    inM[k % n + 1] = gap - math.max(hand, gap - b.back)
+  end
+  local cams = {}
+  for k = 1, n do
+    local sp = list[k]
+    local span = (inM[k] + outM[k]) / len
+    if span * len >= 20 and span < 0.5 then
+      sp.inP, sp.span = (sp.progress - inM[k] / len) % 1, span
+      cams[#cams + 1] = sp
+    end
+  end
+  if #cams >= 4 then
+    spots.sets, spots.set, spots.setAt = { { name = 'placed', cams = cams } }, 1, clock()
+    journal(string.format('director: %d trackside cameras placed round the track, used as a relay', #cams))
+  end
 end
 
 local function buildSpot()
-  -- First choice: the track's own TV cameras.
-  if not spots.trackTried then
+  -- First choice: the track's own TV cameras, one set at a time.
+  if not spots.trackTried and not director.placedOnly then
     spots.trackTried = true
-    local ok, list = pcall(loadTrackCameras)
-    if ok and #list >= 6 then
-      spots.list, spots.built, spots.fromTrack = list, true, true
-      journal(string.format('director: %d of the track\'s own TV cameras', #list))
+    local ok, sets, all = pcall(loadTrackCameras)
+    if ok and sets and #sets > 0 then
+      spots.list, spots.sets, spots.set, spots.setAt = all, sets, 1, clock()
+      spots.built, spots.fromTrack = true, true
+      local names = {}
+      for _, set in ipairs(sets) do table.insert(names, string.format('%s (%d)', set.name, #set.cams)) end
+      journal(string.format('director: the track\'s own TV camera sets, each used as a relay round the lap: %s',
+        table.concat(names, ', ')))
+      return
+    end
+    if ok and all and #all >= 6 then
+      -- Cameras, but no set covers the lap: all of them together, picked one by one (no relay to follow).
+      spots.list, spots.built, spots.fromTrack = all, true, true
+      journal(string.format('director: %d of the track\'s own TV cameras (no set covers the whole lap)', #all))
       return
     end
   end
   if spots.count == 0 then spots.count = math.clamp(math.floor(trackLen() / 110), 16, 80) end
   local k = spots.next
-  if k >= spots.count then spots.built = true return end
+  if k >= spots.count then
+    spots.built = true
+    placedRelay()
+    return
+  end
   spots.next = k + 1
   local len, s = trackLen(), shape()
   local progress = wrap01((k + math.random() * 0.6) / spots.count)
@@ -2067,20 +2215,25 @@ local function buildSpot()
     sides = { r, -r }
   end
 
-  for _, sign in ipairs(sides) do
-    buildYield()
-    -- Low cameras stand well back from the edge (as TV cameras behind the barriers do): right at the edge, a passing
-    -- car would need a whip pan.
-    local pos = base:clone():addScaled(side, sign * (edge + (high and 14 + math.random() * 18 or 9 + math.random() * 14)))
-    local ground = groundAt(pos)
-    if ground then
-      pos.y = ground + (high and (s.oval and 20 or 12) + math.random() * 12 or 3 + math.random() * 4)
-      -- Not under a roof or a bridge.
-      if rayTrack(pos, UP, 30) < 0 then
-        local back, fwd = coverage(pos, progress)
-        if back and back + fwd >= 60 then
-          table.insert(spots.list, { pos = pos, progress = progress, back = back, fwd = fwd, high = high, side = sign })
-          return
+  -- Cameras stand well back from the edge on a long lens, as TV cameras do (behind the barriers, on the banks):
+  -- close to the edge, a passing car needs a whip pan, and a camera keeps the car for a moment only. Where there's no
+  -- view from that far back, a little closer.
+  local bands = high and { { 25, 35 }, { 14, 12 } } or { { 18, 27 }, { 9, 9 } }
+  for _, band in ipairs(bands) do
+    for _, sign in ipairs(sides) do
+      buildYield()
+      local pos = base:clone():addScaled(side, sign * (edge + band[1] + math.random() * band[2]))
+      local ground = groundAt(pos)
+      if ground then
+        pos.y = ground + (high and (s.oval and 20 or 12) + math.random() * 12 or 4 + math.random() * 5)
+        -- Not under a roof or a bridge.
+        if rayTrack(pos, UP, 30) < 0 then
+          local back, fwd = coverage(pos, progress)
+          if back and back + fwd >= 60 then
+            table.insert(spots.list, { pos = pos, progress = progress, back = back, fwd = fwd, high = high, side = sign,
+              range = MAX_RANGE })
+            return
+          end
         end
       end
     end
@@ -2132,33 +2285,41 @@ end
 -- camera the car is coming towards, and (opts.high true/false) a high or a low one. Cutting from opts.last, it
 -- follows TV editing rules: a camera on the same side of the track (the car keeps moving the same way across the
 -- screen), and not one that films it from nearly the same angle (a jump cut).
+-- The picture always moves on down the road: the next camera is one the car is coming towards (it's seen from the
+-- front, then goes by), never one it has already passed (seen from behind) or one further back round the lap than
+-- the last camera, which cuts the picture from the car's front to its back and back again. No dice either: the same
+-- situation always gets the same camera, so the cuts follow a pattern the viewer can read.
 local function spotFor(c, opts)
   local speed = math.max((c.speedKmh or 0) / 3.6, 10)
   local point = carPoint(c)
-  local lastDir = opts.last and point:clone():sub(opts.last.pos):normalize()
+  local last = opts.last
+  local lastDir = last and point:clone():sub(last.pos):normalize()
+  local len = trackLen()
   local best, bestScore = nil, -math.huge
   for _, sp in ipairs(spots.list) do
-    if sp ~= opts.last then
+    if sp ~= last and sp ~= opts.exclude and (director.avoid[sp] or 0) < clock() then
       local rel = pastSpot(c, sp)
       if rel >= -sp.back and rel <= sp.fwd - 25 and sp.pos:distance(point) <= (sp.range or MAX_RANGE) then
         local inStretch = (sp.fwd - rel) / speed -- seconds the car stays in this camera's stretch
         if inStretch >= 2 then
-          local bonus = math.random() * 2
-          if rel < 0 then bonus = bonus + 1.5 end
-          if opts.high ~= nil and sp.high == opts.high then bonus = bonus + 4 end
+          local bonus = 0
+          if rel < 0 then bonus = bonus + 3 elseif rel > 10 then bonus = bonus - 4 end
+          if opts.high ~= nil and sp.high == opts.high then bonus = bonus + 3 end
           if opts.line then
             -- The finish: a camera that sees the car come up to the line and cross it.
-            local line = progressDelta(0, sp.progress) * trackLen()
+            local line = progressDelta(0, sp.progress) * len
             if line >= -sp.back and line <= sp.fwd - 10 and rel < line then bonus = bonus + 6 end
           end
           if lastDir then
-            if sp.side == opts.last.side then bonus = bonus + 2 end
+            if sp.side == last.side then bonus = bonus + 3 end
             if point:clone():sub(sp.pos):normalize():dot(lastDir) > 0.9 then bonus = bonus - 4 end
+            -- (A camera further back round the lap than the one cut from: behind the car, the wrong way.)
+            if progressDelta(sp.progress, last.progress) * len < 5 then bonus = bonus - 6 end
           end
           -- (The look ahead and the ray only for a camera that could still win.)
-          if math.min(inStretch, 7) + bonus > bestScore then
-            local left = math.min(inStretch, smoothSeconds(sp.pos, c, 7))
-            local score = math.min(left, 7) + bonus
+          if math.min(inStretch, 8) + bonus > bestScore then
+            local left = math.min(inStretch, smoothSeconds(sp.pos, c, 8))
+            local score = math.min(left, 8) + bonus
             if left >= 2 and score > bestScore and clearView(sp.pos, point) then best, bestScore = sp, score end
           end
         end
@@ -2166,6 +2327,82 @@ local function spotFor(c, opts)
     end
   end
   return best
+end
+
+-- ---- the relay of one set of the track's own cameras
+-- Is track progress p inside this camera's stretch?
+local function inCamStretch(cam, p) return (p - cam.inP) % 1 < cam.span end
+
+-- The camera of the set whose stretch p is in (of two that overlap, the one the car came into last), the metres of
+-- its stretch left, and the camera after it.
+local function relayCam(set, p)
+  local best, bestInto = nil, math.huge
+  for _, cam in ipairs(set.cams) do
+    if inCamStretch(cam, p) then
+      local into = (p - cam.inP) % 1
+      if into < bestInto then best, bestInto = cam, into end
+    end
+  end
+  if not best then return nil, 0, nil end
+  local len = math.max(trackLen(), 1)
+  local after = (best.inP + best.span + 1 / len) % 1
+  local nextCam
+  for _, cam in ipairs(set.cams) do
+    if cam ~= best and inCamStretch(cam, after) and (not nextCam or (after - cam.inP) % 1 < (after - nextCam.inP) % 1) then
+      nextCam = cam
+    end
+  end
+  return best, (best.span - bestInto) * len, nextCam
+end
+
+-- The point of the lap the relay follows: the filmed car's, or half way to its rival when there's one in the picture.
+local function relayProgress(c, p)
+  local sp = c.splinePosition or 0
+  if p then sp = (sp + progressDelta(p.splinePosition or 0, sp) / 2) % 1 end
+  return sp
+end
+
+-- A camera of the track's own sets for the car: the current set's camera for this point of the lap (its maker placed
+-- it to film there, so it's taken as it is); when that one has only a moment of its stretch left, the next one
+-- already, if it sees the car (a cut to a camera for a moment is a flash on screen). Only when the set's camera here
+-- has just lost the car (opts.exclude), or the set has none here: the camera of another set that sees it, on the
+-- same side of the track as the last one where there's a choice, and that set from then on.
+local function relayFor(c, p, opts)
+  local sets = spots.sets
+  if not sets or #sets == 0 then return nil end
+  local speed = math.max((c.speedKmh or 0) / 3.6, 10)
+  local rp = relayProgress(c, p)
+  local point = carPoint(c)
+  -- (A set's fixed cameras are left out: its maker meant them as still pictures the car drives through, and turned
+  -- to follow the car they whip round as it passes right by.)
+  local function inRange(cam)
+    return cam ~= nil and not cam.fixed and cam ~= opts.exclude and (director.avoid[cam] or 0) < clock()
+      and cam.pos:distance(point) <= cam.range
+  end
+  local function sees(cam) return inRange(cam) and clearView(cam.pos, point, TRACK_CAM_SKIP) end
+  local function pick(set, trusted)
+    local cam, left, nextCam = relayCam(set, rp)
+    if (left < speed * 2.5 or opts.close == cam) and sees(nextCam) then return nextCam end
+    if trusted and inRange(cam) or sees(cam) then return cam end
+    if sees(nextCam) then return nextCam end
+    return nil
+  end
+  local cam = pick(sets[spots.set], true)
+  if cam then return cam, spots.set end
+  local best, bestSet, bestScore = nil, nil, -math.huge
+  for k, set in ipairs(sets) do
+    if k ~= spots.set then
+      local other = pick(set, false)
+      if other then
+        local into = (rp - other.inP) % 1
+        local left = into < other.span and (other.span - into) * trackLen() or other.span * trackLen()
+        local score = math.min(left / speed, 8) -- seconds of its stretch left
+        if opts.last and other.side == opts.last.side then score = score + 3 end
+        if score > bestScore then best, bestSet, bestScore = other, k, score end
+      end
+    end
+  end
+  return best, bestSet
 end
 
 -- ---- choosing shots
@@ -2204,9 +2441,10 @@ local function pitCameraPos(c)
   return nil
 end
 
--- Kind of the next shot. Like on TV: mostly trackside cameras; after an onboard, helicopter or chase shot always
--- back to them; at the start of the race wide, high shots of the field; at the finish the cameras at the line; in
--- the pit lane a pit lane camera. Practice and qualifying have more onboards (a qualifying lap from the cockpit).
+-- Kind of the next shot. Like on TV: mostly trackside cameras, handing the car on down the road; now and then (after
+-- at least four trackside shots and half a minute) an onboard, helicopter or chase shot, and always back to the
+-- trackside cameras after it; the start and the finish on the trackside cameras; in the pit lane a pit lane camera.
+-- Practice and qualifying have more onboards (a qualifying lap from the cockpit).
 local function pickKind(c, p)
   local pits = field(c, 'isInPitlane')
   if director.style ~= 'auto' then
@@ -2216,29 +2454,38 @@ local function pickKind(c, p)
   if pits then return 'pit' end
   if director.finish then return 'tv' end
   local sim, race = ac.getSim(), sessionKind() == 'race'
-  if race and (not sim.isSessionStarted or (director.raceClock or 0) < 25) then return 'tv' end
-  if director.lastKind ~= 'tv' or (director.tvRun or 0) < 2 then return 'tv' end
+  if race and (not sim.isSessionStarted or (director.raceClock or 0) < 40) then return 'tv' end
+  if director.lastKind ~= 'tv' or (director.tvRun or 0) < (race and 4 or 3)
+    or clock() - (director.awayAt or -1e9) < (race and 30 or 20) then return 'tv' end
   local behind = p and p.position:clone():sub(c.position):dot(c.look) < -3
     and p.position:distance(c.position) < 30
   local r = math.random()
-  if director.noOnboard then return r < 0.75 and 'tv' or r < 0.9 and 'heli' or 'chase' end
+  if director.noOnboard then return r < 0.75 and 'tv' or r < 0.93 and 'heli' or 'chase' end
   if not race then
-    if r < 0.55 then return 'tv' end
+    if r < 0.5 then return 'tv' end
     if r < 0.8 then return 'onboard' end
-    if r < 0.92 then return 'heli' end
+    if r < 0.93 then return 'heli' end
     return 'chase'
   end
-  if behind and r < 0.3 then return 'onboard' end
-  if r < (p and 0.5 or 0.62) then return 'tv' end
-  if r < (p and 0.75 or 0.78) then return 'onboard' end
-  if r < 0.9 then return 'heli' end
+  if behind and r < 0.25 then return 'onboard' end
+  if r < 0.65 then return 'tv' end
+  if r < 0.83 then return 'onboard' end
+  if r < 0.95 then return 'heli' end
   return 'chase'
 end
+
+local BLOCKED_CUT = 0.35       -- seconds a camera's view of the car may be blocked before it cuts (a pole, a tree)
+local BLOCKED_CUT_TRACK = 1.5  -- ... for one of the track's own cameras (its maker chose it: a crest, a bridge)
 
 local function newShot(c, p)
   local sim, s = ac.getSim(), shape()
   local kind = pickKind(c, p)
   local shot = { kind = kind, age = 0, blocked = 0 }
+  local last = director.shot
+  -- A new car somewhere else: now and then another of the track's camera sets, for other angles.
+  if spots.sets and #spots.sets > 1 and director.lastTarget ~= c.index and clock() - (spots.setAt or 0) > 90 then
+    spots.set, spots.setAt = spots.set % #spots.sets + 1, clock()
+  end
   if kind == 'pit' then
     local pos = pitCameraPos(c)
     if pos then
@@ -2251,11 +2498,40 @@ local function newShot(c, p)
     shot.kind, shot.fallback = kind, true
   end
   if kind == 'tv' then
+    local sameCar = director.lastTarget == c.index
+    -- (The camera just cut from because it lost the car: not that one again.)
+    local exclude = last and last.kind == 'tv' and last.spot
+      and (last.lost or last.blocked > (last.relay and BLOCKED_CUT_TRACK or BLOCKED_CUT)) and last.spot or nil
+    -- (... nor for a few seconds after: cutting back and forth between it and a stand-in. One that has lost the car
+    -- twice has something in the way of its view: not again this session.)
+    if exclude then
+      exclude.losses = (exclude.losses or 0) + 1
+      director.avoid[exclude] = exclude.losses >= 2 and math.huge or clock() + 5
+    end
+    -- The track's own cameras: the relay of the set in use.
+    if spots.sets then
+      local cam, setIdx = relayFor(c, p, { last = sameCar and last and last.spot or nil, exclude = exclude,
+        close = sameCar and last and last.closeTried and last.spot or nil })
+      if cam then
+        if last and last.kind == 'tv' and last.spot == cam and cam ~= exclude then
+          -- Still this camera's stretch: no cut (cutting to the same camera is a jump cut). Another car here: the
+          -- camera pans over to it.
+          last.age, last.blocked, last.lost = 0, 0, false
+          if not sameCar then director.panFor, director.panTotal = 1.8, 1.8 end
+          return last
+        end
+        if setIdx ~= spots.set then spots.set, spots.setAt = setIdx, clock() end
+        shot.spot, shot.relay, shot.length = cam, true, 30
+        director.pos:set(cam.pos)
+        return shot
+      end
+    end
     local start = sessionKind() == 'race' and (not sim.isSessionStarted or (director.raceClock or 0) < 25)
     local high = not director.finish and (start or (s.oval and math.random() < 0.7)) and true or nil
-    local last = director.shot
-    local spot = spotFor(c, { high = high, last = last and last.spot, line = director.finish })
-    if not spot and last and last.spot and not last.lost and director.lastTarget == c.index
+    -- (The rules for cutting from one camera to the next only for the same car: another car is a fresh start.)
+    local spot = spotFor(c, { high = high, last = sameCar and last and last.spot or nil, line = director.finish,
+      exclude = exclude })
+    if not spot and last and last.spot and not last.lost and sameCar and last.spot ~= exclude
       and spotCovers(last.spot, c, 25) and smoothSeconds(last.spot.pos, c, 2) >= 2 then
       -- No other camera has the car, and this one still does: carry on (cutting to the same camera is a jump cut).
       last.age, last.blocked = 0, 0
@@ -2274,7 +2550,25 @@ local function newShot(c, p)
     shot.rear = p ~= nil and p.position:clone():sub(c.position):dot(c.look) < -3
     shot.length = 5 + math.random() * 4
   elseif kind == 'heli' then
-    shot.sideSign = math.random() < 0.5 and 1 or -1
+    -- (On the side of the track the last trackside camera was on: the car keeps moving the same way across the
+    -- screen.)
+    shot.sideSign = last and last.kind == 'tv' and last.spot and last.spot.side or (math.random() < 0.5 and 1 or -1)
+    -- (... if it sees the car from there; else the other side.)
+    local fwd = vec3(c.velocity.x, 0, c.velocity.z)
+    if fwd:length() < 3 then fwd = vec3(c.look.x, 0, c.look.z) end
+    if fwd:length() > 0.01 then
+      fwd:normalize()
+      local side = fwd:cross(UP, vec3())
+      local function from(sign)
+        local pos = carPoint(c):addScaled(side, sign * 60):addScaled(fwd, 25):addScaled(UP, 54)
+        local ground = groundAt(pos)
+        if ground then pos.y = math.max(pos.y, ground + 40) end
+        return pos
+      end
+      if not clearView(from(shot.sideSign), carPoint(c)) and clearView(from(-shot.sideSign), carPoint(c)) then
+        shot.sideSign = -shot.sideSign
+      end
+    end
     shot.length = 8 + math.random() * 6
   else
     shot.length = 6 + math.random() * 4
@@ -2282,9 +2576,10 @@ local function newShot(c, p)
   return shot
 end
 
+-- Why the shot is over (for the journal's camera notes), or nil while it carries on.
 local function shotOver(c)
   local s = director.shot
-  if not s then return true end
+  if not s then return 'none' end
   if director.lastTarget ~= c.index then
     -- Another car to show. When it's close to the last one, no cut: the followed point glides over to it (see
     -- updateDirector). A trackside camera pans over (if it sees the new car well), the helicopter flies over, and the
@@ -2292,46 +2587,74 @@ local function shotOver(c)
     local last = director.lastTarget and ac.getCar(director.lastTarget)
     local gap = last and last.position:distance(c.position) or math.huge
     local glide = s.age > 1.5 and (
-      s.kind == 'tv' and gap < 80 and spotCovers(s.spot, c, 20) and smoothSeconds(s.spot.pos, c, 2) >= 2
+      s.kind == 'tv' and gap < 80 and spotCovers(s.spot, c, 20) and (s.relay or smoothSeconds(s.spot.pos, c, 2) >= 2)
       or s.kind == 'heli' and gap < 120
       or s.kind == 'chase' and gap < 30 and c.position:clone():sub(last.position):dot(director.heading) > 2)
     if glide then
       director.lastTarget = c.index
       director.panFor = s.kind == 'tv' and 1.8 or 2.2
       director.panTotal = director.panFor
-      return false
+      return nil
     end
-    return true
+    return 'another car'
   end
   -- Something in the way for longer than a passing pole or tree, or the car can't be held in the picture: cut.
-  if s.blocked > 0.35 or s.lost then return true end
+  -- (Never in its first second, though: a cut, then a cut again at once, is a flash on screen.)
+  if (s.blocked > (s.relay and BLOCKED_CUT_TRACK or BLOCKED_CUT) and s.age > 1) or s.lost then
+    return s.lost and 'lost' or 'blocked'
+  end
   -- The finish: from an onboard, helicopter or chase shot, cut to the cameras at the line.
   if director.finish and director.style == 'auto' and s.kind ~= 'tv' and s.kind ~= 'pit' and not s.fallback
-    and s.age > 0.5 then return true end
+    and s.age > 0.5 then return 'finish' end
   if s.kind == 'pit' then
-    if not field(c, 'isInPitlane') and s.age > 1.5 then return true end -- out on track: the trackside cameras
-    if s.age > 1 and panRate(s.pos, director.track, director.vel) > MAX_PAN * 1.1 then return true end
+    if not field(c, 'isInPitlane') and s.age > 1.5 then return 'out of the pits' end -- out on track: the trackside cameras
+    if s.age > 1 and panRate(s.pos, director.track, director.vel) > MAX_PAN * 1.1 then return 'whip pan' end
     local away = c.position:clone():sub(s.pos)
-    if (c.speedKmh or 0) > 8 and away:dot(director.vel) > 0 and away:length() > 25 then return true end -- gone by
-    return s.age > s.length
+    if (c.speedKmh or 0) > 8 and away:dot(director.vel) > 0 and away:length() > 25 then return 'gone by' end -- gone by
+    return s.age > s.length and 'length' or nil
+  end
+  if s.kind == 'tv' and s.relay then
+    -- One of the track's own cameras: on it until the car (the pair, in a fight) runs out of its stretch, and then
+    -- the next camera of the set. Its maker placed it to film all of that stretch, so no cut before. (A car chosen
+    -- for just before the stretch starts, or that spun and slid back a little, stays on it too.)
+    local len = trackLen()
+    local into = ((director.relayP or c.splinePosition or 0) - s.spot.inP) % 1
+    if into >= s.spot.span then
+      local past = (into - s.spot.span) * len
+      local before = (1 - into) * len
+      if past < before then
+        if s.age > 1.2 and past > 2 then return 'stretch' end
+      elseif before > 300 then
+        return 'went back'
+      end
+    end
+    if s.spot.pos:distance(carPoint(c)) > s.spot.range + 30 then return 'too far' end
+    -- The car is about to pass right by the camera: following it from there takes a whip pan and a sudden wide
+    -- zoom. The next camera of the set, if it already sees the car (once a shot; else this one carries on).
+    if not s.closeTried and s.age > 0.8 and s.spot.pos:distance(carPoint(c)) < 22 then
+      s.closeTried = true
+      return 'close'
+    end
+    return nil
   end
   if s.kind == 'tv' then
     -- The car is about to pass so close that following it would be a whip pan: the next camera.
     -- (Cut a moment before it comes to that, as a director watching the car come would.)
-    if s.age > 1 and (panRate(s.spot.pos, director.track, director.vel) > MAX_PAN * 1.1
-      or (s.age > 2 and smoothSeconds(s.spot.pos, c, 0.4) < 0.4)) then return true end
+    if s.age > 2 and (panRate(s.spot.pos, director.track, director.vel) > MAX_PAN * 1.1
+      or (s.age > 3 and smoothSeconds(s.spot.pos, c, 0.4) < 0.4)) then return 'whip pan' end
     local rel = pastSpot(c, s.spot)
-    if rel > s.spot.fwd or rel < -s.spot.back - 30 then return true end -- out of this camera's stretch: the next one
-    if s.spot.pos:distance(carPoint(c)) > (s.spot.range or MAX_RANGE) + 30 then return true end
-    if rel > 30 and s.age > 4 and s.spot.pos:distance(c.position) > 100 then return true end -- gone by, heading away
-    return s.age > s.length
+    if rel > s.spot.fwd or rel < -s.spot.back - 30 then return 'stretch' end -- out of this camera's stretch: the next one
+    if s.spot.pos:distance(carPoint(c)) > (s.spot.range or MAX_RANGE) + 30 then return 'too far' end
+    if rel > 30 and s.age > 4 and s.spot.pos:distance(c.position) > 100 then return 'gone by' end -- gone by, heading away
+    return s.age > s.length and 'length' or nil
   end
   if s.kind == 'onboard' and s.rear and s.age > 2.5 then
     -- Rear-facing: only while the rival is right behind.
     local p = watch.partner ~= nil and ac.getCar(watch.partner)
-    if not p or p.position:clone():sub(c.position):dot(c.look) > -2 or p.position:distance(c.position) > 45 then return true end
+    if not p or p.position:clone():sub(c.position):dot(c.look) > -2 or p.position:distance(c.position) > 45 then return 'rival gone' end
   end
-  return director.style == 'auto' and s.age > s.length
+  -- (A helicopter or chase shot standing in for a trackside camera ends in any style: back to the trackside cameras.)
+  return (director.style == 'auto' or s.fallback) and s.age > s.length and 'length' or nil
 end
 
 -- ---- moving and aiming the camera
@@ -2416,27 +2739,81 @@ local function updateDirector(dt)
   end
   director.partnerShown = p and p.index or nil
   director.finish = finishing(c)
+  -- (The relay follows the pair while both are in the picture.)
+  director.relayP = relayProgress(c, (p and director.rivalIn == p.index) and p or nil)
 
   -- Every new shot is a cut: the camera jumps there instead of panning across the track.
   local snap = false
-  if shotOver(c) then
+  local why = shotOver(c)
+  if why and watch.pending ~= nil and why ~= 'another car' and why ~= 'none' then
+    -- (The shot has ended by itself, and another car is waiting: the cut goes to it, next frame.)
+    local want = watch.pending
+    watch.pending = nil
+    setTarget(want, watch.pendingPartner)
+    return
+  end
+  if why then
+    local before = director.shot
     local shot = newShot(c, p)
-    if shot == director.shot then
+    if shot == before then
       -- (The same shot carries on: no cut.)
-    elseif director.shot and shot.kind == 'tv' and director.lastKind == 'tv' then
+    elseif before and shot.kind == 'tv' and director.lastKind == 'tv' then
       director.tvRun = (director.tvRun or 0) + 1
     elseif shot.kind == 'tv' then
       director.tvRun = 1
     end
-    snap = shot ~= director.shot
+    snap = shot ~= before
+    if snap then
+      if shot.kind ~= 'tv' and shot.kind ~= 'pit' then director.awayAt = clock() end
+      -- (For the journal: how long the shots were.)
+      local st = director.stats
+      if before then
+        st.cuts, st.total = st.cuts + 1, st.total + before.age
+        if before.age < 2.5 then st.short = st.short + 1 end
+        st.kinds[before.kind] = (st.kinds[before.kind] or 0) + 1
+      end
+      if director.notes then
+        -- (Every cut in the journal, to see how a race was filmed: off unless asked for.)
+        local what = shot.kind
+        if shot.spot then
+          local camName = 'placed'
+          for _, set in ipairs(spots.sets or {}) do
+            for k, cam in ipairs(set.cams) do
+              if cam == shot.spot then camName = set.name .. ' #' .. k end
+            end
+          end
+          what = string.format('%s %s (%.3f-%.3f, %.0f m away)', what, camName, shot.spot.inP or -1,
+            shot.spot.inP and (shot.spot.inP + shot.spot.span) % 1 or -1, shot.spot.pos:distance(c.position))
+        end
+        journal(string.format('camera: %s after %.1f s (%s, widest %.0f deg, closest %.0f m) -> %s, on %s at %.3f%s',
+          before and before.kind or '-', before and before.age or 0, why, before and before.widest or 0,
+          before and before.closest or -1, what, carLabel(c.index), c.splinePosition or 0,
+          shot.fallback and ', standing in' or '') .. (before and before.goalWhy and ('; ' .. before.goalWhy) or ''))
+      end
+    end
     director.shot, director.lastKind, director.lastTarget = shot, shot.kind, c.index
   end
   local s = director.shot
   s.age = s.age + dt
   director.panFor = snap and 0 or math.max(0, director.panFor - dt)
+  do
+    local st = director.stats
+    if st.since == 0 then st.since = clock() end
+    if clock() - st.since >= 300 then
+      if st.cuts > 0 then
+        local kinds = {}
+        for k, n in pairs(st.kinds) do table.insert(kinds, k .. ' ' .. n) end
+        table.sort(kinds)
+        journal(string.format('director: %d shots in %.0f min, %.1f s on average, %d under 2.5 s (%s)%s', st.cuts,
+          (clock() - st.since) / 60, st.total / st.cuts, st.short, table.concat(kinds, ', '),
+          spots.sets and string.format('; camera set %s', spots.sets[spots.set].name) or ''))
+      end
+      director.stats = { since = clock(), cuts = 0, total = 0, short = 0, kinds = {} }
+    end
+  end
 
-  -- The car's velocity, lightly smoothed (suspension bounce out).
-  if snap then director.vel:set(c.velocity) else director.vel:setLerp(director.vel, c.velocity, 1 - math.exp(-dt * 10)) end
+  -- The car's velocity, lightly smoothed (suspension bounce and the kerbs out; the camera's pan accelerates smoothly).
+  if snap then director.vel:set(c.velocity) else director.vel:setLerp(director.vel, c.velocity, 1 - math.exp(-dt * 6)) end
 
   -- Level heading of the car, smoothed in two stages so it eases in and out: chase and helicopter cameras follow it,
   -- so they don't swing with every bump, kerb or twitch of the steering. At speed it's mostly the direction the car
@@ -2468,7 +2845,7 @@ local function updateDirector(dt)
   else
     -- (Soft at the start of a pan, firming up gradually: a sudden change of stiffness would jolt the picture.)
     local u = math.clamp(director.panFor / director.panTotal, 0, 1)
-    follow(director.track, director.trackErrV, point, director.vel, 9 - 6.4 * u * u * (3 - 2 * u), dt)
+    follow(director.track, director.trackErrV, point, director.vel, 6 - 3.4 * u * u * (3 - 2 * u), dt)
   end
   local tracked = director.track
 
@@ -2480,15 +2857,35 @@ local function updateDirector(dt)
     -- A camera behind the car (chase) can only frame a rival that is ahead of it (side by side counts).
     if p and s.kind == 'chase' and p.position:clone():sub(c.position):dot(heading) < -4 then p = nil end
 
-    -- 0 alone .. 1 with a rival in the picture: zoom and chase distance ease over with it.
-    local rivalGoal = p and 1 or 0
+    -- The rival comes into the picture only when it's close (within about 20 m, a little more once it's in) and near
+    -- the filmed car as the camera sees it (on a long lens down the road, two cars nose to tail are one picture), so
+    -- both fit without zooming far out. Otherwise the fight is still the one the caption tells of, but the picture
+    -- stays on the filmed car: two dots in a wide shot show neither.
+    -- (How much it's in follows how far apart the two look: it slides out of the picture as they spread across it.)
+    local rivalGoal = 0
+    if p then
+      local near = p.position:distance(c.position) < (director.rivalIn == p.index and 28 or 20)
+      local fits = 1
+      if s.kind ~= 'chase' then
+        local a = carPoint(c):sub(director.pos):normalize()
+        local b = carPoint(p):sub(director.pos):normalize()
+        local apart = math.deg(math.acos(math.clamp(a:dot(b), -1, 1)))
+        local scale = s.kind == 'heli' and 2.5 or 1
+        fits = math.clamp(((director.rivalIn == p.index and 10 or 7) * scale - apart) / (3 * scale), 0, 1)
+      end
+      if near and fits > 0 then rivalGoal, director.rivalCar = fits, p.index end
+    end
+    director.rivalIn = rivalGoal > 0 and p.index or nil
+    -- 0 alone .. 1 with a rival in the picture: aim, zoom and chase distance ease over with it.
     if snap then
       director.rival, director.rivalV = rivalGoal, 0
     else
-      local x, v = spring(director.rival - rivalGoal, director.rivalV, 2.5, dt)
+      local x, v = spring(director.rival - rivalGoal, director.rivalV, 4, dt)
       director.rival, director.rivalV = x + rivalGoal, v
     end
     local rival = math.clamp(director.rival, 0, 1)
+    -- (The rival framed: the one coming in, or the one easing out of the picture.)
+    p = rival > 0.01 and director.rivalCar ~= nil and ac.getCar(director.rivalCar) or nil
 
     -- Where the camera is.
     if s.kind == 'tv' then
@@ -2510,8 +2907,16 @@ local function updateDirector(dt)
         follow(director.pos, director.posV, want, director.vel, 5, dt)
       end
     else -- heli: high up beside the track and a little ahead, flying along with the car
-      local side = heading:cross(UP, vec3())
-      local want = tracked:clone():addScaled(side, s.sideSign * 60):addScaled(heading, 25):addScaled(UP, 54)
+      -- Its own heading turns after the car's only slowly, so it keeps flying alongside instead of swinging round the
+      -- car in every corner (through a hairpin it would whirl right round to the other side of the track).
+      if snap or not s.hHead then
+        s.hHead = heading:clone()
+      else
+        local h = s.hHead:clone():setLerp(s.hHead, heading, 1 - math.exp(-dt * 0.35))
+        if h:length() > 0.3 then s.hHead:set(h):normalize() end
+      end
+      local side = s.hHead:cross(UP, vec3())
+      local want = tracked:clone():addScaled(side, s.sideSign * 60):addScaled(s.hHead, 25):addScaled(UP, 54)
       -- Clear of hills and buildings below it (looked up five times a second; the flight smooths the climb).
       s.groundIn = (s.groundIn or 0) - dt
       if snap or s.groundIn <= 0 then
@@ -2538,63 +2943,45 @@ local function updateDirector(dt)
       if snap or director.packIn <= 0 or director.packFor ~= c.index then
         director.packIn, director.packFor, director.packList = 0.5, c.index, {}
         for _, o in ipairs(runningOrder()) do
-          if o.index ~= c.index and o.index ~= watch.partner and onTrack(o) and o.position:distance(c.position) < 70 then
+          if o.index ~= c.index and o.index ~= watch.partner and onTrack(o) and o.position:distance(c.position) < 40 then
             table.insert(director.packList, o.index)
           end
         end
       end
       for _, i in ipairs(director.packList) do
         local o = ac.getCar(i)
-        if o and o.position:distance(c.position) < 80 then table.insert(pack, carPoint(o)) end
+        if o and o.position:distance(c.position) < 45 then table.insert(pack, carPoint(o)) end
       end
     end
 
-    -- Aim: at the car, shifted towards its rival, with room ahead of it in the direction it moves across the
-    -- picture (as camera operators frame). The offset eases over when a fight starts, ends or changes rival.
+    -- Zoom first, then aim. The zoom comes from the cars alone: the shot's own framing (how many metres of the scene
+    -- the picture is high), never tighter than the car, its rival and the pack need, measured round the middle of the
+    -- picture (the car, or half way to its rival). Then the aim within that picture: room ahead of the car in the
+    -- direction it moves across it (as camera operators frame), only as much as the picture has. (The other way
+    -- round, room ahead in a wider picture asks for a wider picture still, and the zoom ran away to the widest.)
     local dist = math.max(director.pos:distance(tracked), 1)
+    -- (One of the track's own cameras: the zoom range its maker gave it, unless the cars need a wider picture.)
+    local camMin = s.kind == 'tv' and s.relay and s.spot.minFov or nil
+    local camMax = s.kind == 'tv' and s.relay and s.spot.maxFov or nil
+    local floorFov = camMin and math.clamp(camMin, 1.5, 3) or 3
+    local function camRange(f)
+      if camMin and camMax then f = math.clamp(f, camMin, math.max(camMax, camMin)) end
+      return math.max(f, floorFov)
+    end
     if snap and s.kind ~= 'chase' then
       -- (A cut: start from the new shot's framing, not the last one's.)
-      director.fov = math.clamp(math.deg(2 * math.atan((s.kind == 'heli' and 12 or s.kind == 'pit' and 4 or (s.spot.high and 14 or 4)) / dist)), 3, 45)
+      director.fov = camRange(math.clamp(math.deg(2 * math.atan((s.kind == 'heli' and 12 or s.kind == 'pit' and 4 or (s.spot.high and 14 or 4)) / dist)), 3, 45))
     end
-    local halfH = dist * math.tan(math.rad(director.fov) / 2)
-    local toCar = tracked:clone():sub(director.pos):scale(1 / dist)
-    local across = director.vel:clone():addScaled(toCar, -director.vel:dot(toCar))
-    local wantOffset = pPoint and pPoint:clone():sub(point):scale(0.5) or vec3()
-    if s.kind == 'chase' then
-      if not p then wantOffset:addScaled(heading, 5) end
-    else
-      local a = across:length()
-      if a > 0.01 then wantOffset:addScaled(across, math.min(0.45 * halfH, a * 0.4) / a) end
-    end
-    if snap then
-      director.aimOffset:set(wantOffset)
-      director.aimOffsetV:set(0, 0, 0)
-    else
-      springVec(director.aimOffset:sub(wantOffset), director.aimOffsetV, 2.2, dt)
-      director.aimOffset:add(wantOffset)
-    end
-    local aim = tracked:clone():add(director.aimOffset)
+    -- The middle of the picture: the car, moving over towards its rival as the rival comes into the picture.
+    local centre = tracked:clone()
+    if pPoint then centre:addScaled(pPoint:clone():sub(point), 0.5 * rival) end
+    local cdist = math.max(director.pos:distance(centre), 1)
+    local cdir = centre:clone():sub(director.pos):scale(1 / cdist)
 
-    -- Can the camera still see the car (and the one it's fighting)? Checked ten times a second. The chase camera
-    -- sits right behind it.
-    if s.kind ~= 'chase' then
-      s.viewIn = (s.viewIn or 0) - dt
-      if s.viewIn <= 0 then
-        s.viewIn = 0.1
-        local seen = clearView(director.pos, point) and (not pPoint or clearView(director.pos, pPoint))
-        if seen then s.blocked = 0 else s.blocked = s.blocked + 0.1 end
-      end
-    end
-
-    director.dir:set(aim):sub(director.pos):normalize()
-    director.up:set(UP)
-
-    -- Zoom: the shot's own framing (how many metres of the scene the picture is high), but never tighter than the
-    -- cars need.
     local function needFov(target)
       local to = target:clone():sub(director.pos)
       local d = math.max(to:length(), 1)
-      local off = math.deg(math.acos(math.clamp(to:scale(1 / d):dot(director.dir), -1, 1)))
+      local off = math.deg(math.acos(math.clamp(to:scale(1 / d):dot(cdir), -1, 1)))
       local size = math.deg(math.atan(3 / d)) -- half a car length either side
       return 2 * (off + size) * 1.3          -- with a margin round the edge of the picture
     end
@@ -2602,20 +2989,27 @@ local function updateDirector(dt)
     if s.kind == 'chase' then
       wantFov = 52 + 6 * rival
     else
-      local frameH = s.kind == 'heli' and 24 or s.kind == 'pit' and 6 or (s.spot.high and 28 or 8)
-      wantFov = math.clamp(math.deg(2 * math.atan((frameH / 2 + 2 * rival) / dist)), 3, 45)
-      for _, pt in ipairs(pack) do wantFov = math.max(wantFov, math.min(needFov(pt), 40)) end
+      local frameH = s.kind == 'heli' and 24 or s.kind == 'pit' and 6 or (s.spot.high and 20 or 8)
+      wantFov = camRange(math.clamp(math.deg(2 * math.atan((frameH / 2 + 2 * rival) / dist)), 3, 32))
+      for _, pt in ipairs(pack) do wantFov = math.max(wantFov, math.min(needFov(pt), 25)) end
     end
-    local need = needFov(tracked)
-    if pPoint then
+    -- (The chase camera rides right behind the car, which always fills the middle of its picture.)
+    local need = s.kind == 'chase' and 0 or needFov(tracked)
+    if pPoint and s.kind ~= 'chase' then
       local needP = needFov(pPoint)
-      if needP > need then need = need + (needP - need) * rival end -- (the rival comes into the picture gradually)
+      -- (The rival comes into the picture gradually, and never widens it more than about twice the shot's own.)
+      if needP > need then need = need + math.min(needP - need, math.max(wantFov, 8)) * rival end
     end
-    local goal = math.clamp(math.max(wantFov, math.min(need, 70)), 3, 70)
+    local goal = math.clamp(math.max(wantFov, math.min(need, 70)), floorFov, 70)
+    if director.notes and goal > (s.maxGoal or 0) then
+      s.maxGoal = goal
+      s.goalWhy = string.format('goal %.0f: want %.0f, need %.0f, rival %.2f, %.0f m, pack %d', goal, wantFov, need,
+        rival, dist, #pack)
+    end
 
     -- Smoothed in log scale (zooming 20° to 40° looks as big a change as 5° to 10°). The shot's own change of framing
     -- (a car coming closer) is followed without lag; widening (a car nearing the edge, a rival coming into the
-    -- picture) is quick, zooming in slow so the picture doesn't pump in and out, and both start and stop smoothly.
+    -- picture) is quicker than zooming in, so the picture doesn't pump in and out, and both start and stop smoothly.
     local logGoal = math.log(goal)
     if snap or not director.lastGoal then
       director.logFov, director.logFovV, director.goalRate = logGoal, 0, 0
@@ -2623,12 +3017,55 @@ local function updateDirector(dt)
       local rate = math.clamp((logGoal - director.lastGoal) / math.max(dt, 0.001), -2.5, 2.5)
       director.goalRate = math.lerp(director.goalRate, rate, 1 - math.exp(-dt * 4))
       local x = director.logFov + director.goalRate * dt - logGoal
-      local omega = x < 0 and (need > director.fov * 1.05 and 9 or 4) or 1.3
+      local omega = x < 0 and (need > director.fov * 1.05 and 6 or 3) or 1.4
       x, director.logFovV = spring(x, director.logFovV, omega, dt)
       director.logFov = logGoal + x
     end
     director.lastGoal = logGoal
-    director.fov = math.clamp(math.exp(director.logFov), 3, 70)
+    director.fov = math.clamp(math.exp(director.logFov), floorFov, 70)
+    s.widest = math.max(s.widest or 0, director.fov)
+    s.closest = math.min(s.closest or math.huge, dist)
+
+    -- Room ahead: never more than the picture has beside the car (and its rival).
+    local halfH = cdist * math.tan(math.rad(director.fov) / 2)
+    local room = math.max(0, halfH * 0.8 - 3 - (pPoint and pPoint:distance(point) * 0.5 * rival or 0))
+    local wantOffset = vec3()
+    if s.kind == 'chase' then
+      wantOffset:addScaled(heading, 5 * (1 - rival))
+    else
+      local across = director.vel:clone():addScaled(cdir, -director.vel:dot(cdir))
+      local a = across:length()
+      if a > 0.01 then wantOffset:addScaled(across, math.min(0.45 * halfH, a * 0.4, room) / a) end
+    end
+    if snap then
+      director.aimOffset:set(wantOffset)
+      director.aimOffsetV:set(0, 0, 0)
+    else
+      springVec(director.aimOffset:sub(wantOffset), director.aimOffsetV, 1.6, dt)
+      director.aimOffset:add(wantOffset)
+    end
+    if s.kind ~= 'chase' then
+      -- (While the offset eases over it may lag behind a picture that has just got tighter: never past the room.)
+      local o = director.aimOffset:length()
+      if o > room and o > 0.001 then director.aimOffset:scale(room / o) end
+    end
+    local aim = centre:clone():add(director.aimOffset)
+
+    -- Can the camera still see the car (and the one it's fighting)? Checked ten times a second. The chase camera
+    -- sits right behind it, and the helicopter looks down through the treetops (as on TV) rather than cutting away.
+    if s.kind ~= 'chase' and s.kind ~= 'heli' then
+      s.viewIn = (s.viewIn or 0) - dt
+      if s.viewIn <= 0 then
+        s.viewIn = 0.1
+        -- (On one of the track's own cameras only the filmed car counts: its rival may be just round the corner.)
+        local seen = clearView(director.pos, point, s.relay and TRACK_CAM_SKIP or nil)
+          and (not pPoint or s.relay or rival < 0.5 or clearView(director.pos, pPoint))
+        if seen then s.blocked = 0 else s.blocked = s.blocked + 0.1 end
+      end
+    end
+
+    director.dir:set(aim):sub(director.pos):normalize()
+    director.up:set(UP)
 
     -- Last resort, if the car still gets right to the edge of the picture: turn just enough to hold it in. (Not while
     -- panning over to another car: that one comes into the picture as the camera gets there.)
@@ -2645,7 +3082,7 @@ local function updateDirector(dt)
 
     if need > 70 then
       -- Both cars can't be held in one picture: keep the filmed car only. If even that one can't be held, cut.
-      if p then s.noPartner = true elseif s.age > 0.3 then s.lost = true end
+      if p then s.noPartner = true elseif s.age > 0.8 then s.lost = true end
     end
   end
 
@@ -3363,11 +3800,17 @@ local function tabWatch()
       if ui.radioButton(s[2] .. '##shot', director.style == s[1]) then director.style = s[1] director.shot = nil end
     end
     ui.sameLine()
-    if ui.button('Next shot') then director.shot = nil end
+    if ui.button('Next shot') then
+      director.shot = nil
+      -- (On the track's own cameras: the next set, which films this stretch from another place.)
+      if spots.sets and #spots.sets > 1 then spots.set, spots.setAt = spots.set % #spots.sets + 1, clock() end
+    end
     ui.sameLine()
     if ui.button('Next car') then watch.follow, watch.targetHeld, watch.skip = 'grid', 99, true end
     if hasSpline() then
-      ui.textDisabled(spots.built and (spots.fromTrack and (#spots.list .. ' of the track\'s own TV cameras')
+      ui.textDisabled(spots.built and (spots.sets and spots.fromTrack and string.format('The track\'s own TV cameras: set %s (%d of %d)',
+            spots.sets[spots.set].name, spots.set, #spots.sets)
+          or spots.fromTrack and (#spots.list .. ' of the track\'s own TV cameras')
           or (#spots.list .. ' trackside cameras placed round the track'))
         or ('Placing trackside cameras... (' .. #spots.list .. ' so far)'))
     end
