@@ -586,7 +586,8 @@ when the race loads. Open the app from the apps sidebar for its **Watch** tab:
 - the ideal racing line is switched off automatically while you watch, and back to how you had
   it if you take over the car;
 - **Drive yourself** takes over the car (AC's own autopilot key, C, does the same), and **Let AI
-  drive** hands it back.
+  drive** hands it back. While you drive, the AI just races: nothing steers it to the real result
+  (below) until you hand the car back.
 
 **A watched race finishes as it did in real life.** The in-game app steers every car to its real
 finishing position: it nudges each car's pace (AI level, and extra grip for cars too far back; never
